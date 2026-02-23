@@ -699,6 +699,106 @@ export class JobController extends BaseController {
     });
   }
 
+  // ==================== COMPANY: Create job from URL ====================
+  async createCompanyJobFromUrl(req: AuthRequest, res: Response) {
+    await this.handleRequest(req, res, async () => {
+      if (!req.user) {
+        const error: any = new Error('Authentication required');
+        error.status = 401;
+        throw error;
+      }
+
+      const company = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
+      if (!company) {
+        const error: any = new Error('Company profile not found. Please complete your profile first.');
+        error.status = 404;
+        throw error;
+      }
+
+      const url = req.body?.url;
+      const status = req.body?.status || 'draft';
+
+      if (!url || typeof url !== 'string') {
+        const error: any = new Error('URL is required');
+        error.status = 400;
+        throw error;
+      }
+
+      // Validate URL format
+      try {
+        new URL(url);
+      } catch {
+        const error: any = new Error('Invalid URL format');
+        error.status = 400;
+        throw error;
+      }
+
+      console.log(`[JobController] Company "${company.company_name}" creating job from URL: ${url}`);
+
+      // Step 1: Fetch and extract text from URL
+      const jobPostingText = await fetchAndExtractText(url);
+
+      if (!jobPostingText || jobPostingText.trim().length < 100) {
+        const error: any = new Error('Could not extract sufficient text from the job posting URL');
+        error.status = 422;
+        throw error;
+      }
+
+      // Step 2: Use Qwen to extract structured job information
+      console.log(`[JobController] Extracting job info using Qwen...`);
+      const jobInfo = await qwenService.extractJobInfoFromPosting(jobPostingText);
+
+      console.log(`[JobController] Extracted job info:`, jobInfo);
+
+      // Step 3: Create job linked to company
+      const job = await Job.create({
+        id: randomUUID(),
+        title: jobInfo.title,
+        department: jobInfo.department || 'General',
+        company: company.company_name,
+        company_id: company.id,
+        location_type: jobInfo.locationType || 'onsite',
+        country: jobInfo.countryCode || '',
+        city: jobInfo.city || '',
+        description: jobInfo.description,
+        must_have_skills: jobInfo.mustHaveSkills || [],
+        nice_to_have_skills: jobInfo.niceToHaveSkills || [],
+        min_years_experience: jobInfo.minYearsExperience || 0,
+        seniority_level: jobInfo.seniorityLevel || 'mid',
+        status: status,
+      });
+
+      // Step 4: Generate matrix if published
+      if (status === 'published') {
+        this.generateMatrixAsync(job.id).catch(console.error);
+      }
+
+      // Step 5: Return created job
+      const createdJob = await Job.findByPk(job.id, {
+        include: [{ model: JobMatrix, as: 'matrix', required: false }],
+      });
+      const j: any = createdJob;
+      return {
+        id: j.id,
+        title: j.title,
+        department: j.department,
+        company: j.company,
+        companyId: j.company_id,
+        locationType: j.location_type,
+        country: j.country,
+        city: j.city,
+        description: j.description,
+        mustHaveSkills: j.must_have_skills,
+        niceToHaveSkills: j.nice_to_have_skills,
+        minYearsExperience: j.min_years_experience,
+        seniorityLevel: j.seniority_level,
+        status: j.status,
+        createdAt: j.created_at,
+        hasMatrix: !!j.matrix,
+      };
+    });
+  }
+
   async updateCompanyJob(req: AuthRequest, res: Response) {
     await this.handleRequest(req, res, async () => {
       if (!req.user) {

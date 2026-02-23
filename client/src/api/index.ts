@@ -472,6 +472,13 @@ export async function createCompanyJob(jobData: {
   return apiPost<Job>('/company/jobs', jobData);
 }
 
+export async function createCompanyJobFromUrl(
+  url: string,
+  status: 'draft' | 'published' = 'draft'
+): Promise<Job> {
+  return apiPost<Job>('/company/jobs/from-url', { url, status });
+}
+
 export async function updateCompanyJob(id: string, updates: Partial<Job>): Promise<Job> {
   return apiPut<Job>(`/company/jobs/${id}`, updates);
 }

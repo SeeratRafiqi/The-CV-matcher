@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Briefcase, Plus, MapPin, Calendar, Users, FileText, Clock } from 'lucide-react';
+import { Briefcase, Plus, MapPin, Calendar, Users, FileText, Clock, ExternalLink } from 'lucide-react';
 
 const statusOptions = [
   { value: 'all', label: 'All Statuses' },
@@ -41,12 +41,20 @@ export default function CompanyJobs() {
           <h1 className="text-2xl font-bold">Your Jobs</h1>
           <p className="text-muted-foreground">Manage your job postings</p>
         </div>
-        <Link href="/company/jobs/new">
-          <Button className="gap-2">
-            <Plus className="w-4 h-4" />
-            Post New Job
-          </Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link href="/company/jobs/from-url">
+            <Button variant="outline" className="gap-2">
+              <ExternalLink className="w-4 h-4" />
+              Post from URL
+            </Button>
+          </Link>
+          <Link href="/company/jobs/new">
+            <Button className="gap-2">
+              <Plus className="w-4 h-4" />
+              Post New Job
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Filter */}

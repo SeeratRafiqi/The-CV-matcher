@@ -56,6 +56,7 @@ import SkillGapAnalysis from "@/pages/candidate/SkillGapAnalysis";
 import CompanyAnalytics from "@/pages/company/Analytics";
 import CompanyCandidates from "@/pages/company/Candidates";
 import CompanyCandidateProfile from "@/pages/company/CandidateProfile";
+import CompanyPostJobFromUrl from "@/pages/company/PostJobFromUrl";
 
 // Company pages (Phase 6 — AI)
 import InterviewPrep from "@/pages/company/InterviewPrep";
@@ -345,6 +346,13 @@ function Router() {
         <ProtectedRoute>
           <CompanyRoute>
             <PostJob />
+          </CompanyRoute>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/company/jobs/from-url">
+        <ProtectedRoute>
+          <CompanyRoute>
+            <CompanyPostJobFromUrl />
           </CompanyRoute>
         </ProtectedRoute>
       </Route>

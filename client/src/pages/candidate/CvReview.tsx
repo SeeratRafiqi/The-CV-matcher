@@ -1,14 +1,22 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { reviewCv } from '@/api';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { reviewCv, getRecommendedJobs, getCandidateProfile } from '@/api';
+import { useAuthStore } from '@/store/auth';
 import type { CvReviewResult } from '@/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { ScoreBadge } from '@/components/ScoreBadge';
 import {
   Sparkles,
   FileSearch,
@@ -17,12 +25,56 @@ import {
   Lightbulb,
   ArrowRight,
   Loader2,
+  Briefcase,
+  MapPin,
 } from 'lucide-react';
+import { Link } from 'wouter';
+import { getCountryFromCode } from '@/utils/helpers';
 
 export default function CvReview() {
   const { toast } = useToast();
+  const { user } = useAuthStore();
   const [targetRole, setTargetRole] = useState('');
+  const [selectedJobId, setSelectedJobId] = useState('');
   const [result, setResult] = useState<CvReviewResult | null>(null);
+
+  // Get candidate profile
+  const { data: profile } = useQuery({
+    queryKey: ['candidate-profile'],
+    queryFn: getCandidateProfile,
+  });
+
+  const candidateId = user?.candidateId || profile?.id;
+
+  // Fetch matched jobs
+  const { data: matchedJobs, isLoading: jobsLoading } = useQuery({
+    queryKey: ['candidate-recommended-jobs', candidateId],
+    queryFn: () => (candidateId ? getRecommendedJobs(candidateId) : Promise.resolve([])),
+    enabled: !!candidateId,
+  });
+
+  const availableJobs = (matchedJobs || [])
+    .filter((m) => m.job)
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .map((m) => ({
+      id: m.job!.id,
+      title: m.job!.title,
+      company: (m.job as any)?.company || '',
+      department: (m.job as any)?.department || '',
+      score: m.score,
+      country: (m.job as any)?.country || '',
+      city: (m.job as any)?.city || '',
+      seniorityLevel: (m.job as any)?.seniorityLevel || '',
+    }));
+
+  // When a job is selected, set targetRole from job title
+  const handleJobSelect = (jobId: string) => {
+    setSelectedJobId(jobId);
+    const job = availableJobs.find((j) => j.id === jobId);
+    if (job) {
+      setTargetRole(job.title);
+    }
+  };
 
   const mutation = useMutation({
     mutationFn: () => reviewCv(targetRole || undefined),
@@ -48,6 +100,8 @@ export default function CvReview() {
     return 'Poor';
   };
 
+  const selectedJob = availableJobs.find((j) => j.id === selectedJobId);
+
   return (
     <div className="space-y-6">
       <div>
@@ -59,6 +113,72 @@ export default function CvReview() {
           Get actionable suggestions to improve your CV with AI-powered analysis.
         </p>
       </div>
+
+      {/* Matched Jobs Section */}
+      {availableJobs.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Briefcase className="w-5 h-5 text-primary" />
+              Review for a Specific Job
+            </CardTitle>
+            <CardDescription>
+              Select a matched job to get targeted CV feedback for that role. The AI will
+              check if your CV highlights the right skills and experience.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Select
+              value={selectedJobId}
+              onValueChange={handleJobSelect}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Choose a matched job…" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableJobs.map((j) => (
+                  <SelectItem key={j.id} value={j.id}>
+                    <span className="flex items-center gap-2">
+                      {j.title}
+                      {j.company && <span className="text-muted-foreground">— {j.company}</span>}
+                      <span className="text-xs text-muted-foreground">({j.score}% match)</span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {/* Selected job details card */}
+            {selectedJob && (
+              <div className="flex items-center gap-4 p-3 rounded-lg bg-muted/50 border">
+                <ScoreBadge score={selectedJob.score} size="sm" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm truncate">{selectedJob.title}</p>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    {selectedJob.company && <span>{selectedJob.company}</span>}
+                    {selectedJob.city && (
+                      <span className="flex items-center gap-0.5">
+                        <MapPin className="w-3 h-3" />
+                        {selectedJob.city}, {getCountryFromCode(selectedJob.country)}
+                      </span>
+                    )}
+                    {selectedJob.seniorityLevel && (
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
+                        {selectedJob.seniorityLevel}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+                <Link href={`/candidate/jobs/${selectedJob.id}`}>
+                  <Button variant="outline" size="sm" className="text-xs">
+                    View Job
+                  </Button>
+                </Link>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Trigger Card */}
       <Card>
@@ -75,11 +195,17 @@ export default function CvReview() {
         <CardContent className="space-y-4">
           <div className="flex gap-3 items-end">
             <div className="flex-1">
-              <label className="text-sm font-medium mb-1 block">Target Role (optional)</label>
+              <label className="text-sm font-medium mb-1 block">
+                Target Role {selectedJobId ? '(from selected job)' : '(optional)'}
+              </label>
               <Input
                 placeholder="e.g. Senior Frontend Developer"
                 value={targetRole}
-                onChange={(e) => setTargetRole(e.target.value)}
+                onChange={(e) => {
+                  setTargetRole(e.target.value);
+                  // Clear job selection if manually typing
+                  if (selectedJobId) setSelectedJobId('');
+                }}
               />
             </div>
             <Button
@@ -209,7 +335,68 @@ export default function CvReview() {
               </CardContent>
             </Card>
           )}
+
+          {/* Next Steps */}
+          {availableJobs.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Next Steps</CardTitle>
+                <CardDescription>
+                  Based on your review, consider tailoring your CV or generating a cover letter for these jobs.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {availableJobs.slice(0, 5).map((j) => (
+                    <div
+                      key={j.id}
+                      className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors"
+                    >
+                      <ScoreBadge score={j.score} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{j.title}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {j.company} {j.city && `· ${j.city}`}
+                        </p>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <Link href={`/candidate/cover-letter`}>
+                          <Button variant="outline" size="sm" className="text-xs h-7">
+                            Cover Letter
+                          </Button>
+                        </Link>
+                        <Link href={`/candidate/jobs/${j.id}`}>
+                          <Button variant="outline" size="sm" className="text-xs h-7">
+                            View
+                          </Button>
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </>
+      )}
+
+      {/* Empty state — no matched jobs */}
+      {!jobsLoading && availableJobs.length === 0 && (
+        <Card className="border-dashed">
+          <CardContent className="py-8 text-center">
+            <Briefcase className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+            <p className="text-sm font-medium">No Matched Jobs Yet</p>
+            <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+              Upload your CV from the Dashboard to get AI-matched jobs.
+              You can then review your CV against specific job requirements.
+            </p>
+            <Link href="/candidate">
+              <Button variant="outline" size="sm" className="mt-3">
+                Go to Dashboard
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

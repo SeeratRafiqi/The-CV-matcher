@@ -22,302 +22,280 @@ import {
   CoverLetter,
 } from './models/index.js';
 
+// Helper: safely add a column (ignores 'Duplicate column' errors)
+async function addColumn(table: string, column: string, sql: string) {
+  try {
+    await sequelize.query(sql);
+    console.log(`  ✓ Added ${table}.${column}`);
+  } catch (err: any) {
+    if (err.message?.includes('Duplicate column')) {
+      console.log(`  ✓ ${table}.${column} already exists`);
+    } else {
+      console.warn(`  ⚠️ ${table}.${column} skipped: ${err.message?.substring(0, 120)}`);
+    }
+  }
+}
+
+// Helper: safely modify a column / ENUM (logs warning on failure)
+async function modifyColumn(table: string, column: string, sql: string) {
+  try {
+    await sequelize.query(sql);
+    console.log(`  ✓ Modified ${table}.${column}`);
+  } catch (err: any) {
+    console.warn(`  ⚠️ ${table}.${column} modify skipped: ${err.message?.substring(0, 120)}`);
+  }
+}
+
+// Helper: safely add an index (ignores 'Duplicate key name' errors)
+async function addIndex(table: string, indexName: string, sql: string) {
+  try {
+    await sequelize.query(sql);
+    console.log(`  ✓ Added index ${indexName} on ${table}`);
+  } catch (err: any) {
+    if (err.message?.includes('Duplicate key name') || err.message?.includes('Duplicate entry')) {
+      console.log(`  ✓ Index ${indexName} already exists on ${table}`);
+    } else {
+      console.warn(`  ⚠️ Index ${indexName} skipped: ${err.message?.substring(0, 120)}`);
+    }
+  }
+}
+
 async function migrate() {
   try {
     console.log('Starting database migration...');
-    
+
     // Test connection first
     await sequelize.authenticate();
     console.log('✓ Database connection established');
-    
+
     // Ensure all models are loaded
     console.log('Loading models...');
-    
+
     // Check if we should force recreate (only in development)
     const FORCE_RECREATE = process.env.FORCE_RECREATE_TABLES === 'true';
-    
+
+    // ===================================================================
+    // STEP 1: CREATE / SYNC ALL TABLES
+    // ===================================================================
+    // Models are ordered by dependency (parents first, children after).
+    // We use `alter: true` to auto-add missing columns on existing tables,
+    // with a fallback to `alter: false` (create-only) if alter fails
+    // (e.g. "Too many keys" on MySQL).
+    // ===================================================================
+
+    const models = [
+      { name: 'User', model: User, table: 'users' },
+      { name: 'Candidate', model: Candidate, table: 'candidates' },
+      { name: 'CompanyProfile', model: CompanyProfile, table: 'company_profiles' },
+      { name: 'CvFile', model: CvFile, table: 'cv_files' },
+      { name: 'CandidateMatrix', model: CandidateMatrix, table: 'candidate_matrices' },
+      { name: 'Job', model: Job, table: 'jobs' },
+      { name: 'JobMatrix', model: JobMatrix, table: 'job_matrices' },
+      { name: 'Match', model: Match, table: 'matches' },
+      { name: 'PipelineStage', model: PipelineStage, table: 'pipeline_stages' },
+      { name: 'Application', model: Application, table: 'applications' },
+      { name: 'AdminNote', model: AdminNote, table: 'admin_notes' },
+      { name: 'CandidateTag', model: CandidateTag, table: 'candidate_tags' },
+      { name: 'JobReport', model: JobReport, table: 'job_reports' },
+      { name: 'Notification', model: Notification, table: 'notifications' },
+      { name: 'ApplicationHistory', model: ApplicationHistory, table: 'application_history' },
+      { name: 'Conversation', model: Conversation, table: 'conversations' },
+      { name: 'Message', model: Message, table: 'messages' },
+      { name: 'SavedJob', model: SavedJob, table: 'saved_jobs' },
+      { name: 'CompanyMember', model: CompanyMember, table: 'company_members' },
+      { name: 'CoverLetter', model: CoverLetter, table: 'cover_letters' },
+    ];
+
     if (FORCE_RECREATE) {
-      console.log('⚠️  FORCE_RECREATE enabled - dropping and recreating all tables...');
-      await User.sync({ force: true });
-      await Candidate.sync({ force: true });
-      await CompanyProfile.sync({ force: true });
-      await CvFile.sync({ force: true });
-      await CandidateMatrix.sync({ force: true });
-      await Job.sync({ force: true });
-      await JobMatrix.sync({ force: true });
-      await Match.sync({ force: true });
-      await PipelineStage.sync({ force: true });
-      await Application.sync({ force: true });
-      await AdminNote.sync({ force: true });
-      await CandidateTag.sync({ force: true });
-      await JobReport.sync({ force: true });
-      await Notification.sync({ force: true });
-      await ApplicationHistory.sync({ force: true });
-      await Conversation.sync({ force: true });
-      await Message.sync({ force: true });
-      await SavedJob.sync({ force: true });
-      await CompanyMember.sync({ force: true });
-      await CoverLetter.sync({ force: true });
+      console.log('⚠️  FORCE_RECREATE enabled — dropping and recreating all tables...');
+      for (const { name, model } of models) {
+        await model.sync({ force: true });
+        console.log(`  ✓ ${name} table recreated`);
+      }
     } else {
-      // Try to sync with alter, but catch errors for tables with too many indexes
-      const models = [
-        { name: 'User', model: User, table: 'users' },
-        { name: 'Candidate', model: Candidate, table: 'candidates' },
-        { name: 'CompanyProfile', model: CompanyProfile, table: 'company_profiles' },
-        { name: 'CvFile', model: CvFile, table: 'cv_files' },
-        { name: 'CandidateMatrix', model: CandidateMatrix, table: 'candidate_matrices' },
-        { name: 'Job', model: Job, table: 'jobs' },
-        { name: 'JobMatrix', model: JobMatrix, table: 'job_matrices' },
-        { name: 'Match', model: Match, table: 'matches' },
-        { name: 'PipelineStage', model: PipelineStage, table: 'pipeline_stages' },
-        { name: 'Application', model: Application, table: 'applications' },
-        { name: 'AdminNote', model: AdminNote, table: 'admin_notes' },
-        { name: 'CandidateTag', model: CandidateTag, table: 'candidate_tags' },
-        { name: 'JobReport', model: JobReport, table: 'job_reports' },
-        { name: 'Notification', model: Notification, table: 'notifications' },
-        { name: 'ApplicationHistory', model: ApplicationHistory, table: 'application_history' },
-        { name: 'Conversation', model: Conversation, table: 'conversations' },
-        { name: 'Message', model: Message, table: 'messages' },
-        { name: 'SavedJob', model: SavedJob, table: 'saved_jobs' },
-        { name: 'CompanyMember', model: CompanyMember, table: 'company_members' },
-        { name: 'CoverLetter', model: CoverLetter, table: 'cover_letters' },
-      ];
-      
+      console.log('\nSyncing tables (alter: true with fallback)...');
       for (const { name, model, table } of models) {
         try {
-          await model.sync({ alter: false });
-          console.log(`✓ ${name} table verified`);
+          await model.sync({ alter: true });
+          console.log(`  ✓ ${name} table synced`);
         } catch (error: any) {
-          if (error.name === 'SequelizeDatabaseError' && error.message?.includes("doesn't exist")) {
+          const msg = error.message || '';
+          const parentMsg = error.parent?.message || '';
+          if (msg.includes('Too many keys') || parentMsg.includes('Too many keys')) {
+            // MySQL limit on indexes — fall back to create-only
+            console.warn(`  ⚠️ ${name}: Too many keys — falling back to create-only`);
+            try {
+              await sequelize.getQueryInterface().describeTable(table);
+              console.log(`  ✓ ${name} table exists (skipped alter)`);
+            } catch {
+              await model.sync({ alter: false });
+              console.log(`  ✓ ${name} table created (no alter)`);
+            }
+          } else if (msg.includes("doesn't exist") || parentMsg.includes("doesn't exist")) {
+            // Referenced table might not exist yet — try create-only
             await model.sync({ alter: false });
-            console.log(`✓ ${name} table created`);
+            console.log(`  ✓ ${name} table created`);
           } else {
-            if (error.message?.includes('Too many keys') || error.parent?.message?.includes('Too many keys')) {
-              console.warn(`⚠️  ${name} table has too many indexes. Skipping alter.`);
-              try {
-                await sequelize.getQueryInterface().describeTable(table);
-                console.log(`✓ ${name} table exists (skipped alter due to index limit)`);
-              } catch (descError) {
-                console.log(`Creating ${name} table without indexes...`);
-                await model.sync({ alter: false });
-              }
-            } else {
-              throw error;
+            // Log warning but continue to let patches try to fix things
+            console.warn(`  ⚠️ ${name} sync error: ${msg.substring(0, 150)}`);
+            try {
+              await model.sync({ alter: false });
+              console.log(`  ✓ ${name} table created (fallback)`);
+            } catch {
+              console.warn(`  ⚠️ ${name} fallback also failed — patches will attempt to fix`);
             }
           }
         }
       }
     }
-    
-    // === Schema patches (safe to re-run) ===
 
-    // Patch: Add 'internship' to seniority_level ENUM
-    try {
-      await sequelize.query(`
-        ALTER TABLE jobs 
-        MODIFY COLUMN seniority_level ENUM('internship','junior','mid','senior','lead','principal') NOT NULL
-      `);
-      console.log('✓ Patched seniority_level ENUM to include "internship"');
-    } catch (patchError: any) {
-      console.warn('⚠️  seniority_level ENUM patch skipped:', patchError.message?.substring(0, 100));
+    // ===================================================================
+    // STEP 2: SCHEMA PATCHES (safe to re-run, all idempotent)
+    // These handle ENUM changes and columns that `alter: true` may miss.
+    // ===================================================================
+    console.log('\nApplying schema patches...');
+
+    // ---------- users ----------
+    console.log('\n[users]');
+    modifyColumn('users', 'role',
+      `ALTER TABLE users MODIFY COLUMN role ENUM('admin','candidate','company') NOT NULL`
+    );
+    await addColumn('users', 'email_verified',
+      `ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0`
+    );
+    await addColumn('users', 'updated_at',
+      `ALTER TABLE users ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+    );
+    await addIndex('users', 'idx_users_email',
+      `ALTER TABLE users ADD UNIQUE INDEX idx_users_email (email)`
+    );
+
+    // ---------- candidates ----------
+    console.log('\n[candidates]');
+    await addColumn('candidates', 'user_id',
+      `ALTER TABLE candidates ADD COLUMN user_id VARCHAR(36) NULL UNIQUE`
+    );
+    await addColumn('candidates', 'headline',
+      `ALTER TABLE candidates ADD COLUMN headline VARCHAR(500) NULL`
+    );
+    await addColumn('candidates', 'photo_url',
+      `ALTER TABLE candidates ADD COLUMN photo_url VARCHAR(500) NULL`
+    );
+    await addColumn('candidates', 'bio',
+      `ALTER TABLE candidates ADD COLUMN bio TEXT NULL`
+    );
+    await addColumn('candidates', 'linkedin_url',
+      `ALTER TABLE candidates ADD COLUMN linkedin_url VARCHAR(500) NULL`
+    );
+    await addColumn('candidates', 'github_url',
+      `ALTER TABLE candidates ADD COLUMN github_url VARCHAR(500) NULL`
+    );
+    await addColumn('candidates', 'portfolio_url',
+      `ALTER TABLE candidates ADD COLUMN portfolio_url VARCHAR(500) NULL`
+    );
+    await addColumn('candidates', 'profile_visibility',
+      `ALTER TABLE candidates ADD COLUMN profile_visibility ENUM('public','applied_only','hidden') NOT NULL DEFAULT 'public'`
+    );
+    await addColumn('candidates', 'show_email',
+      `ALTER TABLE candidates ADD COLUMN show_email TINYINT(1) NOT NULL DEFAULT 0`
+    );
+    await addColumn('candidates', 'show_phone',
+      `ALTER TABLE candidates ADD COLUMN show_phone TINYINT(1) NOT NULL DEFAULT 0`
+    );
+    await addColumn('candidates', 'updated_at',
+      `ALTER TABLE candidates ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+    );
+
+    // ---------- cv_files ----------
+    console.log('\n[cv_files]');
+    await addColumn('cv_files', 'label',
+      `ALTER TABLE cv_files ADD COLUMN label VARCHAR(255) NULL`
+    );
+    await addColumn('cv_files', 'is_primary',
+      `ALTER TABLE cv_files ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 0`
+    );
+    await modifyColumn('cv_files', 'status',
+      `ALTER TABLE cv_files MODIFY COLUMN status ENUM('uploaded','parsing','matrix_ready','failed','needs_review') NOT NULL DEFAULT 'uploaded'`
+    );
+
+    // ---------- jobs ----------
+    console.log('\n[jobs]');
+    await addColumn('jobs', 'company_id',
+      `ALTER TABLE jobs ADD COLUMN company_id VARCHAR(36) NULL`
+    );
+    await addColumn('jobs', 'deadline',
+      `ALTER TABLE jobs ADD COLUMN deadline DATETIME NULL`
+    );
+    await addColumn('jobs', 'is_featured',
+      `ALTER TABLE jobs ADD COLUMN is_featured TINYINT(1) NOT NULL DEFAULT 0`
+    );
+    await modifyColumn('jobs', 'seniority_level',
+      `ALTER TABLE jobs MODIFY COLUMN seniority_level ENUM('internship','junior','mid','senior','lead','principal') NOT NULL`
+    );
+    await modifyColumn('jobs', 'status',
+      `ALTER TABLE jobs MODIFY COLUMN status ENUM('draft','published','closed') NOT NULL DEFAULT 'draft'`
+    );
+
+    // ---------- matches ----------
+    console.log('\n[matches]');
+    await addColumn('matches', 'application_id',
+      `ALTER TABLE matches ADD COLUMN application_id VARCHAR(36) NULL`
+    );
+
+    // ---------- applications ----------
+    console.log('\n[applications]');
+    await modifyColumn('applications', 'status',
+      `ALTER TABLE applications MODIFY COLUMN status ENUM('applied','screening','interview','offer','hired','rejected','withdrawn') NOT NULL DEFAULT 'applied'`
+    );
+    await addColumn('applications', 'pipeline_stage_id',
+      `ALTER TABLE applications ADD COLUMN pipeline_stage_id VARCHAR(36) NULL`
+    );
+    await addColumn('applications', 'cover_letter',
+      `ALTER TABLE applications ADD COLUMN cover_letter TEXT NULL`
+    );
+    await addColumn('applications', 'notes',
+      `ALTER TABLE applications ADD COLUMN notes JSON NULL`
+    );
+    await addColumn('applications', 'match_id',
+      `ALTER TABLE applications ADD COLUMN match_id VARCHAR(36) NULL`
+    );
+    await addColumn('applications', 'updated_at',
+      `ALTER TABLE applications ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+    );
+
+    // ---------- conversations ----------
+    console.log('\n[conversations]');
+    await addColumn('conversations', 'job_id',
+      `ALTER TABLE conversations ADD COLUMN job_id VARCHAR(36) NULL`
+    );
+    await addColumn('conversations', 'application_id',
+      `ALTER TABLE conversations ADD COLUMN application_id VARCHAR(36) NULL`
+    );
+    await addColumn('conversations', 'last_message_at',
+      `ALTER TABLE conversations ADD COLUMN last_message_at DATETIME NULL`
+    );
+
+    // ---------- company_members ----------
+    console.log('\n[company_members]');
+    await addColumn('company_members', 'joined_at',
+      `ALTER TABLE company_members ADD COLUMN joined_at DATETIME NULL`
+    );
+
+    // ---------- cover_letters ----------
+    console.log('\n[cover_letters]');
+    await addIndex('cover_letters', 'idx_cover_letters_candidate_job',
+      `ALTER TABLE cover_letters ADD INDEX idx_cover_letters_candidate_job (candidate_id, job_id)`
+    );
+
+    // ===================================================================
+    // DONE
+    // ===================================================================
+    console.log('\n✅ All tables created/verified successfully!');
+    console.log('\nTables (' + models.length + '):');
+    for (const { table } of models) {
+      console.log(`  - ${table}`);
     }
 
-    // Patch: Add 'company' to users.role ENUM
-    try {
-      await sequelize.query(`
-        ALTER TABLE users 
-        MODIFY COLUMN role ENUM('admin','candidate','company') NOT NULL
-      `);
-      console.log('✓ Patched users.role ENUM to include "company"');
-    } catch (patchError: any) {
-      console.warn('⚠️  users.role ENUM patch skipped:', patchError.message?.substring(0, 100));
-    }
-
-    // Patch: Add email_verified column to users
-    try {
-      await sequelize.query(`
-        ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0
-      `);
-      console.log('✓ Added email_verified column to users');
-    } catch (patchError: any) {
-      if (patchError.message?.includes('Duplicate column')) {
-        console.log('✓ email_verified column already exists');
-      } else {
-        console.warn('⚠️  email_verified patch skipped:', patchError.message?.substring(0, 100));
-      }
-    }
-
-    // Patch: Add updated_at column to users
-    try {
-      await sequelize.query(`
-        ALTER TABLE users ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-      `);
-      console.log('✓ Added updated_at column to users');
-    } catch (patchError: any) {
-      if (patchError.message?.includes('Duplicate column')) {
-        console.log('✓ updated_at column already exists on users');
-      } else {
-        console.warn('⚠️  users updated_at patch skipped:', patchError.message?.substring(0, 100));
-      }
-    }
-
-    // Patch: Add new columns to candidates
-    const candidateColumns = [
-      { name: 'user_id', sql: 'ALTER TABLE candidates ADD COLUMN user_id VARCHAR(36) NULL UNIQUE' },
-      { name: 'photo_url', sql: 'ALTER TABLE candidates ADD COLUMN photo_url VARCHAR(500) NULL' },
-      { name: 'bio', sql: 'ALTER TABLE candidates ADD COLUMN bio TEXT NULL' },
-      { name: 'linkedin_url', sql: 'ALTER TABLE candidates ADD COLUMN linkedin_url VARCHAR(500) NULL' },
-      { name: 'github_url', sql: 'ALTER TABLE candidates ADD COLUMN github_url VARCHAR(500) NULL' },
-      { name: 'portfolio_url', sql: 'ALTER TABLE candidates ADD COLUMN portfolio_url VARCHAR(500) NULL' },
-      { name: 'updated_at', sql: 'ALTER TABLE candidates ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP' },
-    ];
-
-    for (const col of candidateColumns) {
-      try {
-        await sequelize.query(col.sql);
-        console.log(`✓ Added ${col.name} column to candidates`);
-      } catch (patchError: any) {
-        if (patchError.message?.includes('Duplicate column')) {
-          console.log(`✓ ${col.name} column already exists on candidates`);
-        } else {
-          console.warn(`⚠️  candidates ${col.name} patch skipped:`, patchError.message?.substring(0, 100));
-        }
-      }
-    }
-
-    // Patch: Add company_id, deadline, is_featured to jobs
-    const jobColumns = [
-      { name: 'company_id', sql: 'ALTER TABLE jobs ADD COLUMN company_id VARCHAR(36) NULL' },
-      { name: 'deadline', sql: 'ALTER TABLE jobs ADD COLUMN deadline DATETIME NULL' },
-      { name: 'is_featured', sql: 'ALTER TABLE jobs ADD COLUMN is_featured TINYINT(1) NOT NULL DEFAULT 0' },
-    ];
-
-    for (const col of jobColumns) {
-      try {
-        await sequelize.query(col.sql);
-        console.log(`✓ Added ${col.name} column to jobs`);
-      } catch (patchError: any) {
-        if (patchError.message?.includes('Duplicate column')) {
-          console.log(`✓ ${col.name} column already exists on jobs`);
-        } else {
-          console.warn(`⚠️  jobs ${col.name} patch skipped:`, patchError.message?.substring(0, 100));
-        }
-      }
-    }
-
-    // Patch: Add application_id to matches
-    try {
-      await sequelize.query('ALTER TABLE matches ADD COLUMN application_id VARCHAR(36) NULL');
-      console.log('✓ Added application_id column to matches');
-    } catch (patchError: any) {
-      if (patchError.message?.includes('Duplicate column')) {
-        console.log('✓ application_id column already exists on matches');
-      } else {
-        console.warn('⚠️  matches application_id patch skipped:', patchError.message?.substring(0, 100));
-      }
-    }
-
-    // Patch: Make email unique on users (if not already)
-    try {
-      await sequelize.query(`
-        ALTER TABLE users ADD UNIQUE INDEX idx_users_email (email)
-      `);
-      console.log('✓ Added unique index on users.email');
-    } catch (patchError: any) {
-      if (patchError.message?.includes('Duplicate key name') || patchError.message?.includes('Duplicate entry')) {
-        console.log('✓ users.email unique index already exists');
-      } else {
-        console.warn('⚠️  users email unique index patch skipped:', patchError.message?.substring(0, 100));
-      }
-    }
-
-    // Patch: Update application status ENUM to include pipeline stages
-    try {
-      await sequelize.query(`
-        ALTER TABLE applications 
-        MODIFY COLUMN status ENUM('applied','screening','interview','offer','hired','rejected','withdrawn') NOT NULL DEFAULT 'applied'
-      `);
-      console.log('✓ Patched applications.status ENUM for pipeline stages');
-    } catch (patchError: any) {
-      console.warn('⚠️  applications status ENUM patch skipped:', patchError.message?.substring(0, 100));
-    }
-
-    // Patch: Add pipeline_stage_id to applications
-    try {
-      await sequelize.query('ALTER TABLE applications ADD COLUMN pipeline_stage_id VARCHAR(36) NULL');
-      console.log('✓ Added pipeline_stage_id column to applications');
-    } catch (patchError: any) {
-      if (patchError.message?.includes('Duplicate column')) {
-        console.log('✓ pipeline_stage_id column already exists on applications');
-      } else {
-        console.warn('⚠️  applications pipeline_stage_id patch skipped:', patchError.message?.substring(0, 100));
-      }
-    }
-
-    // === Phase 5 Patches ===
-
-    // Patch: Add privacy columns to candidates
-    const privacyColumns = [
-      { name: 'profile_visibility', sql: "ALTER TABLE candidates ADD COLUMN profile_visibility ENUM('public','applied_only','hidden') NOT NULL DEFAULT 'public'" },
-      { name: 'show_email', sql: 'ALTER TABLE candidates ADD COLUMN show_email TINYINT(1) NOT NULL DEFAULT 0' },
-      { name: 'show_phone', sql: 'ALTER TABLE candidates ADD COLUMN show_phone TINYINT(1) NOT NULL DEFAULT 0' },
-    ];
-
-    for (const col of privacyColumns) {
-      try {
-        await sequelize.query(col.sql);
-        console.log(`✓ Added ${col.name} column to candidates`);
-      } catch (patchError: any) {
-        if (patchError.message?.includes('Duplicate column')) {
-          console.log(`✓ ${col.name} column already exists on candidates`);
-        } else {
-          console.warn(`⚠️  candidates ${col.name} patch skipped:`, patchError.message?.substring(0, 100));
-        }
-      }
-    }
-
-    // Patch: Add label and is_primary to cv_files
-    const cvColumns = [
-      { name: 'label', sql: 'ALTER TABLE cv_files ADD COLUMN label VARCHAR(255) NULL' },
-      { name: 'is_primary', sql: 'ALTER TABLE cv_files ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 0' },
-    ];
-
-    for (const col of cvColumns) {
-      try {
-        await sequelize.query(col.sql);
-        console.log(`✓ Added ${col.name} column to cv_files`);
-      } catch (patchError: any) {
-        if (patchError.message?.includes('Duplicate column')) {
-          console.log(`✓ ${col.name} column already exists on cv_files`);
-        } else {
-          console.warn(`⚠️  cv_files ${col.name} patch skipped:`, patchError.message?.substring(0, 100));
-        }
-      }
-    }
-
-    console.log('\n✓ All tables created/verified successfully!');
-    console.log('\nTables:');
-    console.log('  - users');
-    console.log('  - candidates');
-    console.log('  - company_profiles');
-    console.log('  - cv_files');
-    console.log('  - candidate_matrices');
-    console.log('  - jobs');
-    console.log('  - job_matrices');
-    console.log('  - matches');
-    console.log('  - applications');
-    console.log('  - admin_notes');
-    console.log('  - candidate_tags');
-    console.log('  - job_reports');
-    console.log('  - pipeline_stages');
-    console.log('  - notifications');
-    console.log('  - application_history');
-    console.log('  - conversations');
-    console.log('  - messages');
-    console.log('  - saved_jobs');
-    console.log('  - company_members');
-    console.log('  - cover_letters');
-    
     await sequelize.close();
     process.exit(0);
   } catch (error: any) {

@@ -42,6 +42,8 @@ import CompanySettings from "@/pages/company/Settings";
 
 // Candidate applications
 import CandidateApplications from "@/pages/candidate/Applications";
+import CandidateInterviews from "@/pages/candidate/Interviews";
+import CandidateInterviewAssessment from "@/pages/candidate/InterviewAssessment";
 
 // Candidate pages (Phase 4 & 5)
 import CandidateSavedJobs from "@/pages/candidate/SavedJobs";
@@ -281,6 +283,20 @@ function Router() {
         <ProtectedRoute>
           <CandidateRoute>
             <CandidateApplications />
+          </CandidateRoute>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/candidate/interviews">
+        <ProtectedRoute>
+          <CandidateRoute>
+            <CandidateInterviews />
+          </CandidateRoute>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/candidate/interviews/:id">
+        <ProtectedRoute>
+          <CandidateRoute>
+            <CandidateInterviewAssessment />
           </CandidateRoute>
         </ProtectedRoute>
       </Route>

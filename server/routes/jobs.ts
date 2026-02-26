@@ -38,6 +38,7 @@ companyJobRouter.post('/', (req, res) => jobController.createCompanyJob(req, res
 companyJobRouter.post('/from-url', (req, res) => jobController.createCompanyJobFromUrl(req as any, res));
 companyJobRouter.get('/:id', (req, res) => jobController.getCompanyJob(req, res));
 companyJobRouter.put('/:id', (req, res) => jobController.updateCompanyJob(req, res));
+companyJobRouter.delete('/:id', (req, res) => jobController.deleteCompanyJob(req, res));
 
 export { companyJobRouter };
 export default router;

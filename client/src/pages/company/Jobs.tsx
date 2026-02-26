@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'wouter';
-import { getCompanyJobs } from '@/api';
+import { getCompanyJobs, deleteCompanyJob } from '@/api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusChip } from '@/components/StatusChip';
+import { useToast } from '@/hooks/use-toast';
 import { formatDate } from '@/utils/helpers';
 import {
   Select,
@@ -15,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Briefcase, Plus, MapPin, Calendar, Users, FileText, Clock, ExternalLink } from 'lucide-react';
+import { Briefcase, Plus, MapPin, Calendar, FileText, Clock, ExternalLink, Trash2 } from 'lucide-react';
 
 const statusOptions = [
   { value: 'all', label: 'All Statuses' },
@@ -26,6 +27,8 @@ const statusOptions = [
 
 export default function CompanyJobs() {
   const [statusFilter, setStatusFilter] = useState('all');
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: jobsRaw, isLoading } = useQuery({
     queryKey: ['company-jobs', statusFilter],
@@ -33,6 +36,18 @@ export default function CompanyJobs() {
   });
 
   const jobs = Array.isArray(jobsRaw) ? jobsRaw : [];
+
+  const deleteJobMutation = useMutation({
+    mutationFn: (jobId: string) => deleteCompanyJob(jobId),
+    onSuccess: () => {
+      toast({ title: 'Job deleted' });
+      queryClient.invalidateQueries({ queryKey: ['company-jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['company-stats'] });
+    },
+    onError: (error: any) => {
+      toast({ title: 'Unable to delete job', description: error.message, variant: 'destructive' });
+    },
+  });
 
   return (
     <div className="space-y-6">
@@ -133,6 +148,24 @@ export default function CompanyJobs() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive hover:text-destructive"
+                        disabled={deleteJobMutation.isPending}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const confirmed = window.confirm(
+                            'Delete this job permanently? This cannot be undone. Jobs with applications cannot be deleted.'
+                          );
+                          if (confirmed) {
+                            deleteJobMutation.mutate(job.id);
+                          }
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
                       <div className="text-center">
                         <div className="flex items-center gap-1 text-sm font-medium">
                           <FileText className="w-3.5 h-3.5" />

@@ -5,6 +5,7 @@ import { createServer } from "http";
 import sequelize from "./db/config.js";
 import "./db/models/index.js"; // Initialize models
 import { initializeDatabase } from "./db/init.js";
+import { interviewController } from "./controllers/interviewController.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -139,6 +140,23 @@ app.use((req, res, next) => {
   // Register routes AFTER body parsers
   // Multer in routes will handle multipart requests (body parsers skip them)
   await registerRoutes(httpServer, app);
+
+  const interviewSweepEnabled = process.env.INTERVIEW_SWEEP_ENABLED !== "false";
+  const interviewSweepMs = Number.parseInt(process.env.INTERVIEW_SWEEP_INTERVAL_MS || "", 10) || 5 * 60 * 1000;
+  if (interviewSweepEnabled) {
+    const runInterviewSweep = async () => {
+      try {
+        const result = await interviewController.processExpirySweep();
+        if ((result.expiredCount || 0) > 0 || (result.reminderCount || 0) > 0) {
+          log(`Interview sweep: expired=${result.expiredCount}, reminders=${result.reminderCount}`);
+        }
+      } catch (error) {
+        log(`Interview sweep failed: ${error}`, "error");
+      }
+    };
+    await runInterviewSweep();
+    setInterval(runInterviewSweep, interviewSweepMs);
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

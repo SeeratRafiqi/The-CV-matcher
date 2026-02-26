@@ -20,6 +20,11 @@ import {
   SavedJob,
   CompanyMember,
   CoverLetter,
+  InterviewAssessment,
+  InterviewQuestion,
+  InterviewAttempt,
+  InterviewAnswer,
+  InterviewReport,
 } from './models/index.js';
 
 // Helper: safely add a column (ignores 'Duplicate column' errors)
@@ -104,6 +109,11 @@ async function migrate() {
       { name: 'SavedJob', model: SavedJob, table: 'saved_jobs' },
       { name: 'CompanyMember', model: CompanyMember, table: 'company_members' },
       { name: 'CoverLetter', model: CoverLetter, table: 'cover_letters' },
+      { name: 'InterviewAssessment', model: InterviewAssessment, table: 'interview_assessments' },
+      { name: 'InterviewQuestion', model: InterviewQuestion, table: 'interview_questions' },
+      { name: 'InterviewAttempt', model: InterviewAttempt, table: 'interview_attempts' },
+      { name: 'InterviewAnswer', model: InterviewAnswer, table: 'interview_answers' },
+      { name: 'InterviewReport', model: InterviewReport, table: 'interview_reports' },
     ];
 
     if (FORCE_RECREATE) {
@@ -261,6 +271,42 @@ async function migrate() {
     );
     await addColumn('applications', 'updated_at',
       `ALTER TABLE applications ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+    );
+
+    // ---------- notifications ----------
+    console.log('\n[notifications]');
+    await modifyColumn('notifications', 'type',
+      `ALTER TABLE notifications MODIFY COLUMN type ENUM(
+        'application_received',
+        'status_changed',
+        'shortlisted',
+        'rejected',
+        'new_match',
+        'message_received',
+        'job_expired',
+        'interview_assigned',
+        'interview_deadline_reminder',
+        'interview_expired',
+        'interview_report_ready'
+      ) NOT NULL`
+    );
+
+    // ---------- interview_assessments ----------
+    console.log('\n[interview_assessments]');
+    await addColumn('interview_assessments', 'reminder_sent_at',
+      `ALTER TABLE interview_assessments ADD COLUMN reminder_sent_at DATETIME NULL`
+    );
+    await addColumn('interview_assessments', 'expiry_notified_at',
+      `ALTER TABLE interview_assessments ADD COLUMN expiry_notified_at DATETIME NULL`
+    );
+    await addColumn('interview_assessments', 'is_active',
+      `ALTER TABLE interview_assessments ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1`
+    );
+
+    // ---------- interview_questions ----------
+    console.log('\n[interview_questions]');
+    await addColumn('interview_questions', 'order_index',
+      `ALTER TABLE interview_questions ADD COLUMN order_index INT NOT NULL DEFAULT 0`
     );
 
     // ---------- conversations ----------

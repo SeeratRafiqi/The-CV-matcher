@@ -19,6 +19,11 @@ import { Message } from './Message.js';
 import { SavedJob } from './SavedJob.js';
 import { CompanyMember } from './CompanyMember.js';
 import { CoverLetter } from './CoverLetter.js';
+import { InterviewAssessment } from './InterviewAssessment.js';
+import { InterviewQuestion } from './InterviewQuestion.js';
+import { InterviewAttempt } from './InterviewAttempt.js';
+import { InterviewAnswer } from './InterviewAnswer.js';
+import { InterviewReport } from './InterviewReport.js';
 
 // === User associations ===
 User.hasOne(Candidate, { foreignKey: 'user_id', as: 'candidateProfile' });
@@ -127,6 +132,30 @@ CoverLetter.belongsTo(Candidate, { foreignKey: 'candidate_id', as: 'candidate' }
 Job.hasMany(CoverLetter, { foreignKey: 'job_id', as: 'coverLetters' });
 CoverLetter.belongsTo(Job, { foreignKey: 'job_id', as: 'job' });
 
+// === Interview Assessments ===
+Application.hasMany(InterviewAssessment, { foreignKey: 'application_id', as: 'interviewAssessments' });
+InterviewAssessment.belongsTo(Application, { foreignKey: 'application_id', as: 'application' });
+Candidate.hasMany(InterviewAssessment, { foreignKey: 'candidate_id', as: 'interviewAssessments' });
+InterviewAssessment.belongsTo(Candidate, { foreignKey: 'candidate_id', as: 'candidate' });
+User.hasMany(InterviewAssessment, { foreignKey: 'assigned_by', as: 'assignedInterviews' });
+InterviewAssessment.belongsTo(User, { foreignKey: 'assigned_by', as: 'assignedByUser' });
+
+InterviewAssessment.hasMany(InterviewQuestion, { foreignKey: 'assessment_id', as: 'questions' });
+InterviewQuestion.belongsTo(InterviewAssessment, { foreignKey: 'assessment_id', as: 'assessment' });
+
+InterviewAssessment.hasOne(InterviewAttempt, { foreignKey: 'assessment_id', as: 'attempt' });
+InterviewAttempt.belongsTo(InterviewAssessment, { foreignKey: 'assessment_id', as: 'assessment' });
+Candidate.hasMany(InterviewAttempt, { foreignKey: 'candidate_id', as: 'interviewAttempts' });
+InterviewAttempt.belongsTo(Candidate, { foreignKey: 'candidate_id', as: 'candidate' });
+
+InterviewAttempt.hasMany(InterviewAnswer, { foreignKey: 'attempt_id', as: 'answers' });
+InterviewAnswer.belongsTo(InterviewAttempt, { foreignKey: 'attempt_id', as: 'attempt' });
+InterviewQuestion.hasMany(InterviewAnswer, { foreignKey: 'question_id', as: 'answers' });
+InterviewAnswer.belongsTo(InterviewQuestion, { foreignKey: 'question_id', as: 'question' });
+
+InterviewAttempt.hasOne(InterviewReport, { foreignKey: 'attempt_id', as: 'report' });
+InterviewReport.belongsTo(InterviewAttempt, { foreignKey: 'attempt_id', as: 'attempt' });
+
 export {
   sequelize,
   User,
@@ -149,4 +178,9 @@ export {
   SavedJob,
   CompanyMember,
   CoverLetter,
+  InterviewAssessment,
+  InterviewQuestion,
+  InterviewAttempt,
+  InterviewAnswer,
+  InterviewReport,
 };

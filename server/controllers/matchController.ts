@@ -367,8 +367,10 @@ export class MatchController extends BaseController {
         }
       }
 
-      // Skip very low scores (likely poor matches)
-      if (score < 20) {
+      // Skip very low scores (likely poor matches).
+      // Internship/entry jobs need a lower threshold so junior profiles are not filtered out.
+      const minimumAcceptedScore = isInternshipOrEntryJob ? 5 : 20;
+      if (score < minimumAcceptedScore) {
         console.log(`[MatchController] Skipping candidate ${candidateId} for job ${jobId} - score too low: ${score}`);
         return;
       }

@@ -20,6 +20,7 @@
     "setup": "tsx server/setup.ts",
     "test:upload": "tsx test/test-upload.ts",
     "test:qwen": "tsx test/test-qwen.ts",
+    "test:interview-scoring": "tsx test/test-interview-scoring.ts",
     "test:job-url": "tsx test/test-job-from-url.ts",
     "pm2:start": "pm2 start ecosystem.config.cjs --env production",
     "pm2:start:dev": "pm2 start ecosystem.config.cjs --only asset-manager-dev",

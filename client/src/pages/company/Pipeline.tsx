@@ -5,6 +5,10 @@ import {
   getJobPipeline,
   moveApplicationInPipeline,
   getApplicationHistory,
+  assignInterviewAssessment,
+  getInterviewAssessmentsForApplication,
+  getInterviewAssessmentReport,
+  reissueInterviewAssessment,
 } from '@/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -35,6 +39,9 @@ import {
   Filter,
   History,
   Loader2,
+  MessageCircleQuestion,
+  RefreshCw,
+  FileText,
 } from 'lucide-react';
 import type { PipelineColumn, PipelineApplication, ApplicationHistoryEntry } from '@/types';
 
@@ -56,6 +63,8 @@ export default function Pipeline() {
   const [historyDialog, setHistoryDialog] = useState<string | null>(null);
   const [scoreFilter, setScoreFilter] = useState<number>(0);
   const [searchFilter, setSearchFilter] = useState('');
+  const [assessmentDialogApp, setAssessmentDialogApp] = useState<PipelineApplication | null>(null);
+  const [selectedAssessmentId, setSelectedAssessmentId] = useState<string | null>(null);
 
   const { data: pipeline, isLoading } = useQuery({
     queryKey: ['job-pipeline', jobId],
@@ -67,6 +76,54 @@ export default function Pipeline() {
     queryKey: ['app-history', historyDialog],
     queryFn: () => (historyDialog ? getApplicationHistory(historyDialog) : Promise.resolve([])),
     enabled: !!historyDialog,
+  });
+
+  const { data: assessmentData, isLoading: assessmentLoading } = useQuery({
+    queryKey: ['interview-assessments-app', assessmentDialogApp?.id],
+    queryFn: () => getInterviewAssessmentsForApplication(assessmentDialogApp!.id),
+    enabled: !!assessmentDialogApp?.id,
+  });
+
+  const assessments = assessmentData?.assessments || [];
+  const latestAssessment = assessments[0] || null;
+
+  const { data: reportData, isLoading: reportLoading } = useQuery({
+    queryKey: ['interview-report', selectedAssessmentId],
+    queryFn: () => getInterviewAssessmentReport(selectedAssessmentId!),
+    enabled: !!selectedAssessmentId,
+  });
+
+  const assignAssessmentMutation = useMutation({
+    mutationFn: (applicationId: string) => assignInterviewAssessment(applicationId),
+    onSuccess: () => {
+      toast({ title: 'Assessment assigned' });
+      queryClient.invalidateQueries({ queryKey: ['interview-assessments-app', assessmentDialogApp?.id] });
+      queryClient.invalidateQueries({ queryKey: ['job-pipeline', jobId] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Assign failed',
+        description: error.message || 'Could not assign assessment.',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const reissueAssessmentMutation = useMutation({
+    mutationFn: (assessmentId: string) => reissueInterviewAssessment(assessmentId),
+    onSuccess: () => {
+      toast({ title: 'Assessment reissued' });
+      setSelectedAssessmentId(null);
+      queryClient.invalidateQueries({ queryKey: ['interview-assessments-app', assessmentDialogApp?.id] });
+      queryClient.invalidateQueries({ queryKey: ['job-pipeline', jobId] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Reissue failed',
+        description: error.message || 'Could not reissue assessment.',
+        variant: 'destructive',
+      });
+    },
   });
 
   const moveMutation = useMutation({
@@ -314,17 +371,31 @@ export default function Pipeline() {
                           <Clock className="w-3 h-3" />
                           {formatDate(app.appliedAt)}
                         </span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-1.5 text-xs"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setHistoryDialog(app.id);
-                          }}
-                        >
-                          <History className="w-3 h-3" />
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-1.5 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAssessmentDialogApp(app);
+                              setSelectedAssessmentId(null);
+                            }}
+                          >
+                            <MessageCircleQuestion className="w-3 h-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-1.5 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setHistoryDialog(app.id);
+                            }}
+                          >
+                            <History className="w-3 h-3" />
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   ))
@@ -416,6 +487,88 @@ export default function Pipeline() {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Interview Assessment Dialog */}
+      <Dialog open={!!assessmentDialogApp} onOpenChange={(open) => !open && setAssessmentDialogApp(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Interview Assessment</DialogTitle>
+            <DialogDescription>
+              {assessmentDialogApp?.candidate?.name || 'Candidate'} · application assessment controls
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {assessmentLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : (
+              <>
+                {!latestAssessment ? (
+                  <div className="rounded-md border p-3 space-y-2">
+                    <p className="text-sm text-muted-foreground">No assessment assigned yet.</p>
+                    <Button
+                      onClick={() => assessmentDialogApp && assignAssessmentMutation.mutate(assessmentDialogApp.id)}
+                      disabled={assignAssessmentMutation.isPending}
+                    >
+                      {assignAssessmentMutation.isPending ? 'Assigning...' : 'Assign Assessment'}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="rounded-md border p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium">Latest Assessment</p>
+                      <Badge variant="outline" className="capitalize">
+                        {latestAssessment.status.replace('_', ' ')}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Expires: {formatDateTime(latestAssessment.expiresAt)}
+                    </p>
+
+                    <div className="flex gap-2 flex-wrap">
+                      {latestAssessment.status === 'expired' && (
+                        <Button
+                          variant="outline"
+                          className="gap-2"
+                          onClick={() => reissueAssessmentMutation.mutate(latestAssessment.id)}
+                          disabled={reissueAssessmentMutation.isPending}
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                          {reissueAssessmentMutation.isPending ? 'Reissuing...' : 'Reissue'}
+                        </Button>
+                      )}
+                      {latestAssessment.status === 'submitted' && (
+                        <Button
+                          variant="outline"
+                          className="gap-2"
+                          onClick={() => setSelectedAssessmentId(latestAssessment.id)}
+                        >
+                          <FileText className="w-4 h-4" />
+                          View Report
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectedAssessmentId && (
+                  <div className="rounded-md border p-3 space-y-2">
+                    {reportLoading ? (
+                      <Skeleton className="h-24 w-full" />
+                    ) : !reportData?.report ? (
+                      <p className="text-sm text-muted-foreground">Report not available.</p>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium">Score: {Math.round(reportData.report.overallScore)}/100</p>
+                        <p className="text-sm text-muted-foreground">{reportData.report.recommendation}</p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </DialogContent>

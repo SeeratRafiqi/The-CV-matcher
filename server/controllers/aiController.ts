@@ -181,6 +181,14 @@ export class AiController {
       const job = await Job.findByPk(jobId);
       if (!job) return res.status(404).json({ message: 'Job not found' });
 
+      // Ensure company users can only generate interview questions for their own jobs
+      if (req.user?.role === 'company') {
+        const company = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
+        if (!company || job.company_id !== company.id) {
+          return res.status(403).json({ message: 'Access denied: this job does not belong to your company' });
+        }
+      }
+
       let cvText: string | undefined;
       if (candidateId) {
         try {

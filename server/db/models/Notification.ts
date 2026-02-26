@@ -9,7 +9,11 @@ export type NotificationType =
   | 'rejected'
   | 'new_match'
   | 'message_received'
-  | 'job_expired';
+  | 'job_expired'
+  | 'interview_assigned'
+  | 'interview_deadline_reminder'
+  | 'interview_expired'
+  | 'interview_report_ready';
 
 export interface NotificationAttributes {
   id: string;
@@ -56,7 +60,11 @@ Notification.init(
         'rejected',
         'new_match',
         'message_received',
-        'job_expired'
+        'job_expired',
+        'interview_assigned',
+        'interview_deadline_reminder',
+        'interview_expired',
+        'interview_report_ready'
       ),
       allowNull: false,
     },

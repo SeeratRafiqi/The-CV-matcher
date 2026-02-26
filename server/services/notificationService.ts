@@ -152,6 +152,120 @@ export class NotificationService {
       console.error('Failed to notify new match:', error);
     }
   }
+
+  async notifyInterviewAssigned(
+    candidateId: string,
+    jobId: string,
+    assessmentId: string,
+    expiresAt: Date
+  ): Promise<void> {
+    try {
+      const candidate = await Candidate.findByPk(candidateId);
+      if (!candidate?.user_id) return;
+      const job = await Job.findByPk(jobId);
+      if (!job) return;
+
+      await this.create({
+        userId: candidate.user_id,
+        type: 'interview_assigned',
+        title: 'Behavior Assessment Assigned',
+        body: `Your interview assessment for "${job.title}" is ready. Please complete it within 24 hours.`,
+        data: {
+          jobId,
+          candidateId,
+          assessmentId,
+          expiresAt,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to notify interview assigned:', error);
+    }
+  }
+
+  async notifyInterviewDeadlineReminder(
+    candidateId: string,
+    jobId: string,
+    assessmentId: string,
+    expiresAt: Date
+  ): Promise<void> {
+    try {
+      const candidate = await Candidate.findByPk(candidateId);
+      if (!candidate?.user_id) return;
+      const job = await Job.findByPk(jobId);
+      if (!job) return;
+
+      await this.create({
+        userId: candidate.user_id,
+        type: 'interview_deadline_reminder',
+        title: 'Interview Deadline Reminder',
+        body: `Your assessment for "${job.title}" expires soon. Please submit before the deadline.`,
+        data: {
+          jobId,
+          candidateId,
+          assessmentId,
+          expiresAt,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to notify interview reminder:', error);
+    }
+  }
+
+  async notifyInterviewExpired(
+    candidateId: string,
+    jobId: string,
+    assessmentId: string
+  ): Promise<void> {
+    try {
+      const candidate = await Candidate.findByPk(candidateId);
+      if (!candidate?.user_id) return;
+      const job = await Job.findByPk(jobId);
+      if (!job) return;
+
+      await this.create({
+        userId: candidate.user_id,
+        type: 'interview_expired',
+        title: 'Interview Assessment Expired',
+        body: `Your assessment window for "${job.title}" has expired. Contact the hiring team to request a new one.`,
+        data: {
+          jobId,
+          candidateId,
+          assessmentId,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to notify interview expired:', error);
+    }
+  }
+
+  async notifyInterviewReportReady(
+    candidateId: string,
+    jobId: string,
+    assessmentId: string,
+    score: number
+  ): Promise<void> {
+    try {
+      const candidate = await Candidate.findByPk(candidateId);
+      if (!candidate?.user_id) return;
+      const job = await Job.findByPk(jobId);
+      if (!job) return;
+
+      await this.create({
+        userId: candidate.user_id,
+        type: 'interview_report_ready',
+        title: 'Interview Assessment Completed',
+        body: `Your assessment report for "${job.title}" is ready. Score: ${Math.round(score)}/100.`,
+        data: {
+          jobId,
+          candidateId,
+          assessmentId,
+          score,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to notify interview report ready:', error);
+    }
+  }
 }
 
 export const notificationService = new NotificationService();

@@ -32,6 +32,8 @@ import type {
   PrivacySettings,
   MemberRole,
   SavedCoverLetter,
+  InterviewAssessment,
+  InterviewAssessmentReport,
 } from '@/types';
 
 // ==================== AUTH ====================
@@ -443,6 +445,50 @@ export async function getCompanyStats(): Promise<CompanyStats> {
   return apiGet<CompanyStats>('/applications/company-stats');
 }
 
+// ==================== INTERVIEW ASSESSMENTS ====================
+export async function getMyInterviewAssessments(): Promise<{ assessments: InterviewAssessment[] }> {
+  return apiGet<{ assessments: InterviewAssessment[] }>('/interviews/mine');
+}
+
+export async function getInterviewAssessment(id: string): Promise<{ assessment: InterviewAssessment }> {
+  return apiGet<{ assessment: InterviewAssessment }>(`/interviews/${id}`);
+}
+
+export async function startInterviewAssessment(id: string): Promise<{ assessment: InterviewAssessment }> {
+  return apiPost<{ assessment: InterviewAssessment }>(`/interviews/${id}/start`);
+}
+
+export async function saveInterviewAnswer(
+  assessmentId: string,
+  questionId: string,
+  selectedOption: string
+): Promise<{ message: string }> {
+  return apiPut<{ message: string }>(`/interviews/${assessmentId}/answers/${questionId}`, { selectedOption });
+}
+
+export async function submitInterviewAssessment(
+  id: string,
+  autoSubmitted: boolean = false
+): Promise<{ message: string; assessment: InterviewAssessment }> {
+  return apiPost<{ message: string; assessment: InterviewAssessment }>(`/interviews/${id}/submit`, { autoSubmitted });
+}
+
+export async function getInterviewAssessmentReport(id: string): Promise<{ report: InterviewAssessmentReport }> {
+  return apiGet<{ report: InterviewAssessmentReport }>(`/interviews/${id}/report`);
+}
+
+export async function assignInterviewAssessment(applicationId: string): Promise<{ message: string; assessment: InterviewAssessment }> {
+  return apiPost<{ message: string; assessment: InterviewAssessment }>('/interviews/assign', { applicationId });
+}
+
+export async function reissueInterviewAssessment(id: string): Promise<{ message: string; assessment: InterviewAssessment }> {
+  return apiPost<{ message: string; assessment: InterviewAssessment }>(`/interviews/${id}/reissue`);
+}
+
+export async function getInterviewAssessmentsForApplication(applicationId: string): Promise<{ assessments: InterviewAssessment[] }> {
+  return apiGet<{ assessments: InterviewAssessment[] }>(`/interviews/application/${applicationId}`);
+}
+
 // ==================== COMPANY JOB MANAGEMENT ====================
 export async function getCompanyJobs(status?: string): Promise<Job[]> {
   const params = new URLSearchParams();
@@ -481,6 +527,10 @@ export async function createCompanyJobFromUrl(
 
 export async function updateCompanyJob(id: string, updates: Partial<Job>): Promise<Job> {
   return apiPut<Job>(`/company/jobs/${id}`, updates);
+}
+
+export async function deleteCompanyJob(id: string): Promise<{ message: string }> {
+  return apiDelete<{ message: string }>(`/company/jobs/${id}`);
 }
 
 // ==================== PIPELINE (company) ====================

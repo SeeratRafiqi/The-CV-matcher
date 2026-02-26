@@ -8,6 +8,7 @@ import {
   updateCompanyJob,
   getMatchesForJob,
   createConversation,
+  deleteCompanyJob,
 } from '@/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -57,6 +58,7 @@ import {
   Send,
   Loader2,
   Target,
+  Trash2,
 } from 'lucide-react';
 import type { Application, ApplicationStatus } from '@/types';
 
@@ -178,6 +180,19 @@ export default function CompanyJobDetail() {
     },
   });
 
+  const deleteJobMutation = useMutation({
+    mutationFn: () => deleteCompanyJob(jobId),
+    onSuccess: () => {
+      toast({ title: 'Job deleted' });
+      queryClient.invalidateQueries({ queryKey: ['company-jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['company-stats'] });
+      setLocation('/company/jobs');
+    },
+    onError: (error: any) => {
+      toast({ title: 'Unable to delete job', description: error.message, variant: 'destructive' });
+    },
+  });
+
   if (jobLoading) {
     return (
       <div className="space-y-6">
@@ -239,6 +254,22 @@ export default function CompanyJobDetail() {
               Close Job
             </Button>
           )}
+          <Button
+            variant="destructive"
+            className="gap-2"
+            disabled={deleteJobMutation.isPending}
+            onClick={() => {
+              const confirmed = window.confirm(
+                'Delete this job permanently? This cannot be undone. Jobs with applications cannot be deleted.'
+              );
+              if (confirmed) {
+                deleteJobMutation.mutate();
+              }
+            }}
+          >
+            <Trash2 className="w-4 h-4" />
+            {deleteJobMutation.isPending ? 'Deleting...' : 'Delete Job'}
+          </Button>
         </div>
       </div>
 

@@ -255,6 +255,53 @@ export interface Application {
   } | null;
 }
 
+export type InterviewAssessmentStatus = 'assigned' | 'in_progress' | 'submitted' | 'expired';
+
+export interface InterviewAssessmentQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  order: number;
+  competencyTag?: string | null;
+  selectedOption?: string | null;
+}
+
+export interface InterviewAssessment {
+  id: string;
+  applicationId: string;
+  candidateId: string;
+  status: InterviewAssessmentStatus;
+  assignedAt: string;
+  expiresAt: string;
+  durationMinutes: number;
+  maxQuestions: number;
+  startedAt?: string | null;
+  submittedAt?: string | null;
+  autoSubmitted: boolean;
+  remainingSeconds: number;
+  questions: InterviewAssessmentQuestion[];
+  attempt?: {
+    id: string;
+    status: 'in_progress' | 'submitted' | 'expired';
+    startedAt: string;
+    submittedAt?: string | null;
+  } | null;
+  job?: {
+    id: string;
+    title: string;
+  } | null;
+}
+
+export interface InterviewAssessmentReport {
+  id: string;
+  overallScore: number;
+  dimensionScores: Record<string, number>;
+  strengths: string[];
+  concerns: string[];
+  recommendation: string;
+  generatedAt: string;
+}
+
 export interface BrowseJobsResponse {
   jobs: Job[];
   pagination: {
@@ -346,7 +393,11 @@ export type NotificationType =
   | 'rejected'
   | 'new_match'
   | 'message_received'
-  | 'job_expired';
+  | 'job_expired'
+  | 'interview_assigned'
+  | 'interview_deadline_reminder'
+  | 'interview_expired'
+  | 'interview_report_ready';
 
 export interface AppNotification {
   id: string;

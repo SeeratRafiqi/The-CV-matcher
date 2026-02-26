@@ -1,6 +1,17 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { Job, JobMatrix, CompanyProfile, Application, Match } from '../db/models/index.js';
+import {
+  Job,
+  JobMatrix,
+  CompanyProfile,
+  Application,
+  Match,
+  SavedJob,
+  CoverLetter,
+  JobReport,
+  Conversation,
+  Message,
+} from '../db/models/index.js';
 import { BaseController } from '../db/base/BaseController.js';
 import { qwenService } from '../services/qwen.js';
 import { fetchAndExtractText } from '../utils/htmlParser.js';
@@ -140,7 +151,7 @@ export class JobController extends BaseController {
       });
 
       // Generate matrix if published
-      if (status === 'published') {
+      if (job.status === 'published') {
         await this.generateMatrixAsync(job.id);
       }
 
@@ -241,7 +252,7 @@ export class JobController extends BaseController {
       });
 
       // Step 4: Generate matrix if published
-      if (status === 'published') {
+      if (job.status === 'published') {
         await this.generateMatrixAsync(job.id);
       }
 
@@ -332,7 +343,7 @@ export class JobController extends BaseController {
       });
 
       // Step 4: Generate matrix if published
-      if (status === 'published') {
+      if (job.status === 'published') {
         await this.generateMatrixAsync(job.id);
       }
 
@@ -669,7 +680,7 @@ export class JobController extends BaseController {
       });
 
       // Generate matrix if published
-      if (status === 'published') {
+      if (job.status === 'published') {
         this.generateMatrixAsync(job.id).catch(console.error);
       }
 
@@ -769,7 +780,7 @@ export class JobController extends BaseController {
       });
 
       // Step 4: Generate matrix if published
-      if (status === 'published') {
+      if (job.status === 'published') {
         this.generateMatrixAsync(job.id).catch(console.error);
       }
 
@@ -807,7 +818,12 @@ export class JobController extends BaseController {
         throw error;
       }
 
-      const { id } = req.params;
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (!id) {
+        const error: any = new Error('Job ID is required');
+        error.status = 400;
+        throw error;
+      }
       const company = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
       if (!company) {
         const error: any = new Error('Company profile not found');
@@ -878,6 +894,81 @@ export class JobController extends BaseController {
     });
   }
 
+  async deleteCompanyJob(req: AuthRequest, res: Response) {
+    await this.handleRequest(req, res, async () => {
+      if (!req.user) {
+        const error: any = new Error('Authentication required');
+        error.status = 401;
+        throw error;
+      }
+
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (!id) {
+        const error: any = new Error('Job ID is required');
+        error.status = 400;
+        throw error;
+      }
+      const company = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
+      if (!company) {
+        const error: any = new Error('Company profile not found');
+        error.status = 404;
+        throw error;
+      }
+
+      const job = await Job.findByPk(id);
+      if (!job) {
+        const error: any = new Error('Job not found');
+        error.status = 404;
+        throw error;
+      }
+
+      if (job.company_id !== company.id) {
+        const error: any = new Error('Access denied: this job does not belong to your company');
+        error.status = 403;
+        throw error;
+      }
+
+      // Keep data integrity: do not allow hard delete once applications exist.
+      const applicationCount = await Application.count({ where: { job_id: job.id } });
+      if (applicationCount > 0) {
+        const error: any = new Error(
+          'This job already has applications and cannot be deleted. Please close the job instead.'
+        );
+        error.status = 400;
+        throw error;
+      }
+
+      const tx = await Job.sequelize!.transaction();
+      try {
+        // Clean dependent data that can still exist even without applications
+        await Match.destroy({ where: { job_id: job.id }, transaction: tx });
+        await JobMatrix.destroy({ where: { job_id: job.id }, transaction: tx });
+        await JobReport.destroy({ where: { job_id: job.id }, transaction: tx });
+        await SavedJob.destroy({ where: { job_id: job.id }, transaction: tx });
+        await CoverLetter.destroy({ where: { job_id: job.id }, transaction: tx });
+
+        const conversations = await Conversation.findAll({
+          where: { job_id: job.id },
+          attributes: ['id'],
+          transaction: tx,
+        });
+        const conversationIds = conversations.map((c: any) => c.id);
+        if (conversationIds.length > 0) {
+          await Message.destroy({ where: { conversation_id: { [Op.in]: conversationIds } }, transaction: tx });
+        }
+        await Conversation.destroy({ where: { job_id: job.id }, transaction: tx });
+
+        await job.destroy({ transaction: tx });
+        await tx.commit();
+      } catch (err) {
+        await tx.rollback();
+        throw err;
+      }
+
+      return { message: 'Job deleted successfully' };
+    });
+  }
+
   async getCompanyJob(req: AuthRequest, res: Response) {
     await this.handleRequest(req, res, async () => {
       if (!req.user) {
@@ -886,7 +977,12 @@ export class JobController extends BaseController {
         throw error;
       }
 
-      const { id } = req.params;
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (!id) {
+        const error: any = new Error('Job ID is required');
+        error.status = 400;
+        throw error;
+      }
       const company = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
       if (!company) {
         const error: any = new Error('Company profile not found');
@@ -966,12 +1062,29 @@ export class JobController extends BaseController {
       const job = await Job.findByPk(jobId);
       if (!job) return;
 
-      const matrixData = await qwenService.generateJobMatrix(
-        job.title,
-        job.description,
-        job.must_have_skills || [],
-        job.nice_to_have_skills || []
-      );
+      let matrixData: any = null;
+      try {
+        matrixData = await qwenService.generateJobMatrix(
+          job.title,
+          job.description,
+          job.must_have_skills || [],
+          job.nice_to_have_skills || []
+        );
+      } catch (error: any) {
+        // Keep the publish flow resilient: if AI matrix generation fails,
+        // still create a usable deterministic matrix so matching can run.
+        console.warn('[JobController] AI matrix generation failed, using fallback matrix:', error?.message || error);
+      }
+
+      const requiredSkills = Array.isArray(matrixData?.requiredSkills)
+        ? matrixData.requiredSkills
+        : (job.must_have_skills || []).map((skill: string) => ({ skill, weight: 85 }));
+      const preferredSkills = Array.isArray(matrixData?.preferredSkills)
+        ? matrixData.preferredSkills
+        : (job.nice_to_have_skills || []).map((skill: string) => ({ skill, weight: 60 }));
+      const experienceWeight = Number.isFinite(matrixData?.experienceWeight) ? matrixData.experienceWeight : 20;
+      const locationWeight = Number.isFinite(matrixData?.locationWeight) ? matrixData.locationWeight : 15;
+      const domainWeight = Number.isFinite(matrixData?.domainWeight) ? matrixData.domainWeight : 10;
 
       // Delete existing matrix if any
       await JobMatrix.destroy({ where: { job_id: jobId } });
@@ -980,11 +1093,11 @@ export class JobController extends BaseController {
       await JobMatrix.create({
         id: randomUUID(),
         job_id: jobId,
-        required_skills: matrixData.requiredSkills || [],
-        preferred_skills: matrixData.preferredSkills || [],
-        experience_weight: matrixData.experienceWeight || 20,
-        location_weight: matrixData.locationWeight || 15,
-        domain_weight: matrixData.domainWeight || 10,
+        required_skills: requiredSkills,
+        preferred_skills: preferredSkills,
+        experience_weight: experienceWeight,
+        location_weight: locationWeight,
+        domain_weight: domainWeight,
         qwen_model_version: qwenService.getModelVersion(),
       });
 

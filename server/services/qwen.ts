@@ -1287,6 +1287,133 @@ Return ONLY valid JSON.`;
     return JSON.parse(response);
   }
 
+  async generateBehavioralMcqAssessment(input: {
+    candidateName?: string;
+    candidateHeadline?: string;
+    jobTitle: string;
+    jobDescription: string;
+    mustHaveSkills: string[];
+    niceToHaveSkills: string[];
+    questionCount?: number;
+  }): Promise<{
+    questions: {
+      question: string;
+      options: string[];
+      correctOption: string;
+      competencyTag: string;
+      weight: number;
+    }[];
+  }> {
+    const questionCount = Math.min(10, Math.max(1, input.questionCount || 10));
+    const prompt = `You are an expert behavioral interviewer.
+Generate exactly ${questionCount} multiple-choice behavioral questions for this candidate and role.
+
+Role title: ${input.jobTitle}
+Role description: ${(input.jobDescription || '').substring(0, 3000)}
+Must-have skills: ${(input.mustHaveSkills || []).join(', ')}
+Nice-to-have skills: ${(input.niceToHaveSkills || []).join(', ')}
+Candidate name: ${input.candidateName || 'Candidate'}
+Candidate headline: ${input.candidateHeadline || 'Not provided'}
+
+Requirements:
+- Each question must test behavioral decision-making relevant to this role.
+- Each question must have exactly 4 options.
+- "correctOption" must be the full option text that is best behaviorally.
+- competencyTag must be one of: communication, collaboration, ownership, accountability, decision_making, growth_mindset, teamwork, inclusivity, initiative.
+- weight must be an integer from 1 to 20.
+- Keep language clear and practical.
+- Return exactly ${questionCount} questions.
+
+Return JSON only in this exact shape:
+{
+  "questions": [
+    {
+      "question": "string",
+      "options": ["string", "string", "string", "string"],
+      "correctOption": "string",
+      "competencyTag": "string",
+      "weight": 10
+    }
+  ]
+}
+`;
+
+    const response = await this.callQwen(prompt, true);
+    const parsed = JSON.parse(response);
+
+    if (!Array.isArray(parsed?.questions)) {
+      return { questions: [] };
+    }
+
+    return {
+      questions: parsed.questions.slice(0, questionCount).map((q: any) => ({
+        question: String(q?.question || '').trim(),
+        options: Array.isArray(q?.options) ? q.options.slice(0, 4).map((o: any) => String(o)) : [],
+        correctOption: String(q?.correctOption || ''),
+        competencyTag: String(q?.competencyTag || 'behavior'),
+        weight: Number.isFinite(q?.weight) ? Math.max(1, Math.min(20, Math.round(q.weight))) : 10,
+      })),
+    };
+  }
+
+  async evaluateInterviewAssessment(input: {
+    jobTitle: string;
+    jobDescription: string;
+    candidateName: string;
+    score: number;
+    dimensionScores: Record<string, number>;
+    answers: {
+      question: string;
+      options: string[];
+      correctOption: string;
+      selectedOption: string | null;
+      isCorrect: boolean;
+      competencyTag: string;
+      weight: number;
+    }[];
+  }): Promise<{
+    strengths: string[];
+    concerns: string[];
+    recommendation: string;
+  }> {
+    const prompt = `You are an interview assessor for behavioral MCQ assessments.
+
+Job title: ${input.jobTitle}
+Job description: ${(input.jobDescription || '').substring(0, 2000)}
+Candidate: ${input.candidateName}
+Overall score: ${input.score}/100
+Dimension scores: ${JSON.stringify(input.dimensionScores)}
+
+Assessment answers:
+${JSON.stringify(input.answers).substring(0, 12000)}
+
+Create a concise assessment report:
+- strengths: 2-5 bullet-style strings
+- concerns: 2-5 bullet-style strings
+- recommendation: 1-2 sentences with hiring guidance for behavioral fit
+
+Rules:
+- Ground insights in the provided answers and scores.
+- Do not invent background details.
+- Keep language professional and concise.
+
+Return JSON only:
+{
+  "strengths": ["..."],
+  "concerns": ["..."],
+  "recommendation": "..."
+}
+`;
+
+    const response = await this.callQwen(prompt, true);
+    const parsed = JSON.parse(response);
+    return {
+      strengths: Array.isArray(parsed?.strengths) ? parsed.strengths.map((x: any) => String(x)) : [],
+      concerns: Array.isArray(parsed?.concerns) ? parsed.concerns.map((x: any) => String(x)) : [],
+      recommendation: String(parsed?.recommendation || ''),
+    };
+  }
+
   /**
    * 6.7 — Candidate Summary / Pitch Generator
    */

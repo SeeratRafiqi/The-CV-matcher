@@ -45,6 +45,7 @@ import {
   Target,
   MessageCircleQuestion,
   Wand2,
+  Timer,
 } from 'lucide-react';
 
 interface AppLayoutProps {
@@ -66,6 +67,7 @@ const candidateMenuItems = [
   { title: 'Dashboard', url: '/candidate/dashboard', icon: LayoutDashboard },
   { title: 'Browse Jobs', url: '/candidate/jobs', icon: Briefcase },
   { title: 'My Applications', url: '/candidate/applications', icon: ClipboardList },
+  { title: 'Interviews', url: '/candidate/interviews', icon: Timer },
   { title: 'Saved Jobs', url: '/candidate/saved-jobs', icon: Bookmark },
   { title: 'Messages', url: '/messages', icon: MessageSquare },
   { title: 'Notifications', url: '/notifications', icon: Bell },

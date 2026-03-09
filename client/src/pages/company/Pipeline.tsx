@@ -42,6 +42,7 @@ import {
   MessageCircleQuestion,
   RefreshCw,
   FileText,
+  Mic,
 } from 'lucide-react';
 import type { PipelineColumn, PipelineApplication, ApplicationHistoryEntry } from '@/types';
 

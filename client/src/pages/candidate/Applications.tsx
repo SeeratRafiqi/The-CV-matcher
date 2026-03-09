@@ -25,6 +25,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
+import {
   FileText,
   Building2,
   MapPin,
@@ -35,6 +40,8 @@ import {
   Clock,
   Briefcase,
   AlertTriangle,
+  ChevronDown,
+  MessageSquare,
 } from 'lucide-react';
 import type { Application, ApplicationStatus } from '@/types';
 
@@ -263,6 +270,55 @@ export default function CandidateApplications() {
                           </Button>
                         )}
                       </div>
+
+                      {/* Cover letter submitted for this application */}
+                      <Collapsible className="mt-3">
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground -ml-2">
+                            <MessageSquare className="w-3.5 h-3.5" />
+                            {app.coverLetter?.trim()
+                              ? 'View cover letter submitted for this application'
+                              : 'Cover letter for this application'}
+                            <ChevronDown className="w-3.5 h-3.5 ml-0.5 data-[state=open]:rotate-180 transition-transform" />
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="mt-2 rounded-lg border bg-muted/40 p-3 text-sm">
+                            {app.coverLetter?.trim() ? (
+                              <p className="whitespace-pre-wrap text-foreground/90">{app.coverLetter}</p>
+                            ) : (
+                              <p className="text-muted-foreground italic">No cover letter was submitted for this application.</p>
+                            )}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+
+                      {/* CV submitted for this application (original vs tailored) */}
+                      <Collapsible className="mt-2">
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground -ml-2">
+                            <FileText className="w-3.5 h-3.5" />
+                            {app.cvType === 'tailored'
+                              ? 'View CV submitted (tailored for this job)'
+                              : 'View CV submitted (original)'}
+                            <ChevronDown className="w-3.5 h-3.5 ml-0.5 data-[state=open]:rotate-180 transition-transform" />
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="mt-2 rounded-lg border bg-muted/40 p-3 text-sm">
+                            <p className="text-muted-foreground mb-2">
+                              You submitted your <strong>{app.cvType === 'tailored' ? 'tailored' : 'original'}</strong> CV for this application.
+                            </p>
+                            {app.submittedCvText?.trim() ? (
+                              <pre className="whitespace-pre-wrap text-foreground/90 font-sans text-xs max-h-64 overflow-y-auto rounded border p-2 bg-background/50">
+                                {app.submittedCvText}
+                              </pre>
+                            ) : (
+                              <p className="text-muted-foreground italic">Submitted CV text is not stored for this application.</p>
+                            )}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
                     </div>
                   </div>
                 </CardContent>

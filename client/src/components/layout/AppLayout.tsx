@@ -193,8 +193,11 @@ export function AppLayout({ children }: AppLayoutProps) {
             <div className="flex items-center gap-3 p-2 rounded-md bg-sidebar-accent/50">
               <Avatar className="w-8 h-8">
                 {avatarUrl && <AvatarImage src={avatarUrl} />}
-                <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                  {user?.name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'U'}
+                <AvatarFallback className="bg-primary/10 text-primary text-xs flex items-center justify-center">
+                  {(() => {
+                    const initials = user?.name?.trim() && user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+                    return initials || <User className="w-4 h-4" />;
+                  })()}
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">

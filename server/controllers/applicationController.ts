@@ -11,10 +11,21 @@ import {
   CandidateMatrix,
   PipelineStage,
 } from '../db/models/index.js';
+import { CvFile } from '../db/models/CvFile.js';
 import { BaseController } from '../db/base/BaseController.js';
 import type { AuthRequest } from '../middleware/auth.js';
 import { randomUUID } from 'crypto';
 import { notificationService } from '../services/notificationService.js';
+import { pdfParserService } from '../services/pdfParser.js';
+
+async function getCvTextForCandidate(candidateId: string): Promise<string> {
+  const cvFile = await CvFile.findOne({
+    where: { candidate_id: candidateId },
+    order: [['uploaded_at', 'DESC']],
+  });
+  if (!cvFile?.file_path) throw new Error('No CV found for this candidate.');
+  return pdfParserService.extractText(cvFile.file_path);
+}
 
 export class ApplicationController extends BaseController {
   protected model = Application;
@@ -28,7 +39,7 @@ export class ApplicationController extends BaseController {
         throw error;
       }
 
-      const { jobId, coverLetter } = req.body;
+      const { jobId, coverLetter, cvType, tailoredCvText } = req.body;
       if (!jobId) {
         const error: any = new Error('Job ID is required');
         error.status = 400;
@@ -63,6 +74,20 @@ export class ApplicationController extends BaseController {
         throw error;
       }
 
+      // Resolve which CV to attach: tailored or original
+      const useTailored = cvType === 'tailored' && typeof tailoredCvText === 'string' && tailoredCvText.trim().length > 0;
+      let submittedCvText: string;
+      const resolvedCvType = useTailored ? 'tailored' : 'original';
+      if (useTailored) {
+        submittedCvText = tailoredCvText.trim();
+      } else {
+        try {
+          submittedCvText = await getCvTextForCandidate(candidate.id);
+        } catch {
+          submittedCvText = '';
+        }
+      }
+
       // Check if already applied
       const existingApp = await Application.findOne({
         where: { candidate_id: candidate.id, job_id: jobId },
@@ -73,6 +98,8 @@ export class ApplicationController extends BaseController {
           await existingApp.update({
             status: 'applied',
             cover_letter: coverLetter || existingApp.cover_letter,
+            cv_type: resolvedCvType,
+            submitted_cv_text: submittedCvText || null,
             applied_at: new Date(),
             updated_at: new Date(),
           });
@@ -106,6 +133,8 @@ export class ApplicationController extends BaseController {
         job_id: jobId,
         status: 'applied',
         cover_letter: coverLetter || null,
+        cv_type: resolvedCvType,
+        submitted_cv_text: submittedCvText || null,
         match_id: existingMatch?.id || null,
         pipeline_stage_id: pipelineStageId,
       });
@@ -170,6 +199,8 @@ export class ApplicationController extends BaseController {
         jobId: app.job_id,
         status: app.status,
         coverLetter: app.cover_letter,
+        cvType: app.cv_type || 'original',
+        submittedCvText: app.submitted_cv_text || null,
         appliedAt: app.applied_at,
         updatedAt: app.updated_at,
         matchScore: app.match?.score || null,
@@ -409,12 +440,7 @@ export class ApplicationController extends BaseController {
         status: 'published',
       };
 
-      // Only show non-expired jobs
-      where[Op.or as any] = [
-        { deadline: null },
-        { deadline: { [Op.gte]: new Date() } },
-      ];
-
+      // Include all published jobs (including past-deadline); UI shows "Closed" tag and blocks apply
       if (country && country !== 'all') where.country = country;
       if (locationType && locationType !== 'all') where.location_type = locationType;
       if (seniorityLevel && seniorityLevel !== 'all') where.seniority_level = seniorityLevel;
@@ -690,6 +716,8 @@ export class ApplicationController extends BaseController {
       jobId: app.job_id,
       status: app.status,
       coverLetter: app.cover_letter,
+      cvType: app.cv_type || 'original',
+      submittedCvText: app.submitted_cv_text || null,
       appliedAt: app.applied_at,
       updatedAt: app.updated_at,
       job: job ? {

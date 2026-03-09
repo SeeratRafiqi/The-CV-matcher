@@ -2,7 +2,42 @@
 
 ## Common Server Issues
 
-### 1. MySQL Error: "Too many keys specified; max 64 keys allowed"
+### 1. Registration / Login failed: "connect ECONNREFUSED ::1:3306"
+
+**Error:**
+```
+Registration failed. connect ECONNREFUSED ::1:3306
+```
+(or similar `ECONNREFUSED` on port 3306)
+
+**Cause:**
+The app uses **MySQL** to store users and data. Port 3306 is MySQL’s default port. This error means MySQL is not running (or not installed) on your machine, so the server cannot connect to the database.
+
+**Solutions:**
+
+- **Option A: Install and run MySQL**
+  1. Install MySQL (e.g. [MySQL Community Server](https://dev.mysql.com/downloads/mysql/) or [XAMPP](https://www.apachefriends.org/) which includes MySQL).
+  2. Start the MySQL service.
+  3. Create a database (e.g. `cv_matcher`) and a user with access.
+  4. In the project root, create or edit `.env` and set either:
+     - `DATABASE_URL=mysql://USER:PASSWORD@localhost:3306/cv_matcher`
+     or separate variables:
+     - `DB_HOST=localhost`
+     - `DB_PORT=3306`
+     - `DB_USER=your_user`
+     - `DB_PASSWORD=your_password`
+     - `DB_NAME=cv_matcher`
+  5. Run migrations: `npm run db:migrate` (or use the server’s setup if it runs migrations on start).
+  6. Restart the app and try registering again.
+
+- **Option B: Use a cloud MySQL**
+  Use a hosted MySQL (e.g. PlanetScale, AWS RDS, or your provider) and set `DATABASE_URL` in `.env` to the connection string they give you.
+
+Until MySQL is running and the app can connect, registration and login will fail with a connection error. The app does not support running without a database for auth.
+
+---
+
+### 2. MySQL Error: "Too many keys specified; max 64 keys allowed"
 
 **Error:**
 ```
@@ -55,7 +90,7 @@ The migration script has been updated to avoid this issue by:
 
 ---
 
-### 2. Port Already in Use (EADDRINUSE)
+### 3. Port Already in Use (EADDRINUSE)
 
 **Error:**
 ```
@@ -175,7 +210,7 @@ npm run pm2:start        # For production
 
 ---
 
-### 3. Database Connection Issues
+### 4. Database Connection Issues
 
 **Error:**
 ```
@@ -211,7 +246,7 @@ Database connection failed
 
 ---
 
-### 4. PM2 App Keeps Restarting
+### 5. PM2 App Keeps Restarting
 
 **Symptoms:**
 - App shows as "errored" or keeps restarting
@@ -244,7 +279,7 @@ Database connection failed
 
 ---
 
-### 5. Migration Fails During Startup
+### 6. Migration Fails During Startup
 
 **Error:**
 ```
@@ -271,7 +306,7 @@ Database initialization failed: Error: Command failed: npm run db:migrate
 
 ---
 
-### 6. PM2 Not Starting on Server Reboot
+### 7. PM2 Not Starting on Server Reboot
 
 **Solutions:**
 

@@ -2,11 +2,16 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth.js';
 import { qwenService } from '../services/qwen.js';
 import { pdfParserService } from '../services/pdfParser.js';
+import { textToPdfBuffer } from '../services/pdfExport.js';
+import { buildPdfFromOriginalTemplate } from '../services/pdfTemplateExport.js';
+import { buildPdfWithProfessionalTemplate, buildPdfFromStructuredResume, type StructuredResumeData } from '../services/pdfResumeTemplate.js';
+import path from 'node:path';
 import { Candidate } from '../db/models/Candidate.js';
 import { CvFile } from '../db/models/CvFile.js';
 import { CandidateMatrix } from '../db/models/CandidateMatrix.js';
 import { Job } from '../db/models/Job.js';
 import { CompanyProfile } from '../db/models/CompanyProfile.js';
+import { TailoredResume } from '../db/models/TailoredResume.js';
 
 /**
  * Helper: get CV text for a candidate (reads from the PDF file on disk).
@@ -24,6 +29,68 @@ async function getCvTextForCandidate(candidateId: string): Promise<string> {
   return pdfParserService.extractText(cvFile.file_path);
 }
 
+/** Get the absolute file path of the candidate's latest CV for template-based PDF export. */
+async function getCvFilePathForCandidate(candidateId: string): Promise<string> {
+  const cvFile = await CvFile.findOne({
+    where: { candidate_id: candidateId },
+    order: [['uploaded_at', 'DESC']],
+  });
+  if (!cvFile?.file_path) throw new Error('No CV found for this candidate.');
+  return path.isAbsolute(cvFile.file_path) ? cvFile.file_path : path.resolve(process.cwd(), cvFile.file_path);
+}
+
+/**
+ * Escape special regex characters in a string.
+ */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Normalize a string for matching: trim, collapse whitespace, optional leading bullet.
+ */
+function normalizeForMatch(s: string): string {
+  return s
+    .trim()
+    .replace(/^\s*[•\-*]\s*/, '') // strip leading bullet char
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Apply AI-suggested bullet replacements to CV text (original → improved).
+ * Keeps the rest of the CV unchanged; only the suggested lines are replaced.
+ * Tries exact match first, then flexible whitespace, then normalized (ignore leading bullet).
+ */
+function applyRevisedBullets(
+  cvText: string,
+  rewrittenBullets: { original: string; improved: string }[]
+): string {
+  let revised = cvText;
+  for (const { original, improved } of rewrittenBullets) {
+    if (!original || typeof improved !== 'string') continue;
+    // 1) Exact match
+    if (revised.includes(original)) {
+      revised = revised.split(original).join(improved);
+      continue;
+    }
+    // 2) Flexible whitespace: any run of whitespace matches as single space
+    const normalizedOriginal = original.trim().replace(/\s+/g, ' ');
+    let pattern = escapeRegex(normalizedOriginal).replace(/\\ /g, '\\s+');
+    const re2 = new RegExp(pattern, 'gi');
+    const before = revised;
+    revised = revised.replace(re2, () => improved);
+    if (revised !== before) continue;
+    // 3) Allow optional leading bullet in CV (• - *) so "• Led team" matches "Led team"
+    const norm = normalizeForMatch(original);
+    if (!norm) continue;
+    pattern = escapeRegex(norm).replace(/\\ /g, '\\s+');
+    const re3 = new RegExp('(?:^|\\n)\\s*[•\\-*]?\\s*' + pattern, 'gim');
+    revised = revised.replace(re3, () => improved);
+  }
+  return revised;
+}
+
 export class AiController {
   // ============================================================
   //  6.1  CV Review / Fixer (Candidate)
@@ -37,12 +104,122 @@ export class AiController {
       if (!candidate) return res.status(404).json({ message: 'Candidate profile not found' });
 
       const cvText = await getCvTextForCandidate(candidate.id);
-      const result = await qwenService.reviewCV(cvText, targetRole);
+      if (!cvText || !cvText.trim()) {
+        return res.status(400).json({
+          message: 'No CV text found. Upload a CV first and wait for it to be processed.',
+        });
+      }
 
-      return res.json(result);
+      try {
+        const result = await qwenService.reviewCV(cvText, targetRole);
+        // Normalize bullets (LLM may return camelCase or snake_case)
+        const bullets = Array.isArray(result.rewrittenBullets)
+          ? result.rewrittenBullets
+          : Array.isArray((result as any).rewritten_bullets)
+            ? (result as any).rewritten_bullets
+            : [];
+        // Always build revisedCvText from the uploaded CV: same content with only the suggested lines replaced
+        const revisedCvText =
+          bullets.length > 0 ? applyRevisedBullets(cvText, bullets) : undefined;
+        return res.json({
+          ...result,
+          rewrittenBullets: bullets,
+          revisedCvText,
+        });
+      } catch (qwenError: any) {
+        const msg = qwenError?.message || '';
+        if (msg.includes('not configured') || msg.includes('API_KEY') || msg.includes('API key')) {
+          const fallback: {
+            score: number;
+            sections: { section: string; issues: string[]; suggestions: string[] }[];
+            rewrittenBullets: { original: string; improved: string }[];
+            summary: string;
+          } = {
+            score: 0,
+            sections: [
+              {
+                section: 'AI Review Unavailable',
+                issues: ['AI-powered review requires an API key.'],
+                suggestions: [
+                  'Add ALIBABA_LLM_API_KEY (or DASHSCOPE_API_KEY) to your .env file to enable AI CV review.',
+                  'Get a key from Alibaba Cloud DashScope / Qwen API.',
+                ],
+              },
+            ],
+            rewrittenBullets: [],
+            summary:
+              'AI CV review is not available because no API key is configured. Set ALIBABA_LLM_API_KEY in the server .env file and restart the app to enable detailed AI feedback on your CV.',
+          };
+          return res.status(200).json(fallback);
+        }
+        throw qwenError;
+      }
     } catch (error: any) {
       console.error('[AI] CV Review failed:', error.message);
       return res.status(500).json({ message: error.message || 'CV review failed' });
+    }
+  }
+
+  /**
+   * Get revised CV text: candidate's uploaded CV with suggested bullet replacements applied.
+   * Use when the client has rewrittenBullets but needs the full revised text (e.g. for PDF download).
+   */
+  async getRevisedCvText(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const body = req.body || {};
+      const bullets = Array.isArray(body.rewrittenBullets)
+        ? body.rewrittenBullets
+        : Array.isArray(body.rewritten_bullets)
+          ? body.rewritten_bullets
+          : [];
+      const candidate = await Candidate.findOne({ where: { user_id: userId } });
+      if (!candidate) return res.status(404).json({ message: 'Candidate profile not found' });
+      const cvText = await getCvTextForCandidate(candidate.id);
+      if (!cvText || !cvText.trim()) {
+        return res.status(400).json({ message: 'No CV text found. Upload a CV first.' });
+      }
+      const revisedCvText = bullets.length > 0 ? applyRevisedBullets(cvText, bullets) : cvText;
+      return res.json({ revisedCvText });
+    } catch (error: any) {
+      console.error('[AI] getRevisedCvText failed:', error.message);
+      return res.status(500).json({ message: error.message || 'Failed to get revised CV text' });
+    }
+  }
+
+  /**
+   * Export improved CV as PDF using the professional template (section headers, spacing, bullets).
+   * Tries structured extraction first for best layout; falls back to parsed-section template.
+   */
+  async exportCvReviewPdf(req: AuthRequest, res: Response) {
+    try {
+      const { revisedCvText } = req.body || {};
+      if (!revisedCvText || typeof revisedCvText !== 'string') {
+        return res.status(400).json({ message: 'revisedCvText is required. Run AI CV Review first and use the improved text.' });
+      }
+      const trimmed = revisedCvText.trim();
+      let buffer: Buffer;
+      try {
+        const structured = await qwenService.extractStructuredResume(trimmed);
+        if (structured && structured.name != null) {
+          buffer = await buildPdfFromStructuredResume(structured as StructuredResumeData);
+        } else {
+          buffer = await buildPdfWithProfessionalTemplate(trimmed);
+        }
+      } catch (_) {
+        buffer = await buildPdfWithProfessionalTemplate(trimmed);
+      }
+      const filename = `improved-cv-${Date.now()}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(buffer);
+    } catch (error: any) {
+      console.error('[AI] CV export PDF failed:', error.message);
+      if (!res.headersSent) {
+        return res.status(500).json({ message: error.message || 'Failed to generate PDF' });
+      }
     }
   }
 
@@ -78,6 +255,192 @@ export class AiController {
     }
   }
 
+  /**
+   * Tailor CV reordered: same content as your CV, only reordered for this job (no fabrication).
+   * Returns tailoredCvText + keyChanges. Use for download and apply-with-tailored-CV.
+   */
+  async tailorCvReordered(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { jobId } = req.body;
+      if (!jobId) return res.status(400).json({ message: 'jobId is required' });
+
+      const candidate = await Candidate.findOne({ where: { user_id: userId } });
+      if (!candidate) return res.status(404).json({ message: 'Candidate profile not found' });
+      const job = await Job.findByPk(jobId);
+      if (!job) return res.status(404).json({ message: 'Job not found' });
+
+      const cvText = await getCvTextForCandidate(candidate.id);
+      const skills = [...(job.must_have_skills || []), ...(job.nice_to_have_skills || [])];
+
+      const result = await qwenService.tailorCVReordered(
+        cvText,
+        job.title,
+        job.description || '',
+        skills
+      );
+
+      return res.json(result);
+    } catch (error: any) {
+      console.error('[AI] Tailor CV reordered failed:', error.message);
+      return res.status(500).json({ message: error.message || 'Tailoring failed' });
+    }
+  }
+
+  /**
+   * Tailor resume for job: apply CV review suggestions (improved bullets) then reorder/remove
+   * irrelevant content for the job. No fabrication—only existing resume content reorganized.
+   */
+  async tailorResumeForJob(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { jobId } = req.body;
+      if (!jobId) return res.status(400).json({ message: 'jobId is required' });
+
+      const candidate = await Candidate.findOne({ where: { user_id: userId } });
+      if (!candidate) return res.status(404).json({ message: 'Candidate profile not found' });
+      const job = await Job.findByPk(jobId);
+      if (!job) return res.status(404).json({ message: 'Job not found' });
+
+      const cvText = await getCvTextForCandidate(candidate.id);
+      const skills = [...(job.must_have_skills || []), ...(job.nice_to_have_skills || [])];
+
+      let textToTailor = cvText;
+      const appliedSuggestions: string[] = [];
+
+      try {
+        const reviewResult = await qwenService.reviewCV(cvText, job.title);
+        const bullets = Array.isArray(reviewResult.rewrittenBullets)
+          ? reviewResult.rewrittenBullets
+          : Array.isArray((reviewResult as any).rewritten_bullets)
+            ? (reviewResult as any).rewritten_bullets
+            : [];
+        if (bullets.length > 0) {
+          textToTailor = applyRevisedBullets(cvText, bullets);
+          bullets.forEach((b: any) => {
+            appliedSuggestions.push(`Improved bullet: "${(b.original || '').slice(0, 60)}..."`);
+          });
+        }
+      } catch (_) {
+        /* continue with original text */
+      }
+
+      const tailorResult = await qwenService.tailorCVReordered(
+        textToTailor,
+        job.title,
+        job.description || '',
+        skills
+      );
+
+      const tailoredCvText = (tailorResult.tailoredCvText || '').replace(/\\n/g, '\n');
+      const keyChanges = [...appliedSuggestions, ...(tailorResult.keyChanges || [])];
+
+      let structuredResume: Record<string, unknown> | null = null;
+      try {
+        structuredResume = await qwenService.extractStructuredResume(tailoredCvText) as Record<string, unknown>;
+      } catch (_) {
+        /* use raw text + fallback template when extraction fails */
+      }
+
+      const [record] = await TailoredResume.findOrCreate({
+        where: { candidate_id: candidate.id, job_id: job.id },
+        defaults: {
+          candidate_id: candidate.id,
+          job_id: job.id,
+          tailored_cv_text: tailoredCvText,
+          structured_resume: structuredResume ? JSON.stringify(structuredResume) : null,
+        },
+      });
+      if (record) {
+        await record.update({
+          tailored_cv_text: tailoredCvText,
+          structured_resume: structuredResume ? JSON.stringify(structuredResume) : null,
+        });
+      }
+
+      return res.json({
+        tailoredCvText,
+        keyChanges,
+        jobTitle: job.title,
+        structuredResume: structuredResume ?? undefined,
+      });
+    } catch (error: any) {
+      console.error('[AI] tailorResumeForJob failed:', error.message);
+      return res.status(500).json({ message: error.message || 'Tailoring failed' });
+    }
+  }
+
+  /**
+   * Get saved tailored resume for the current candidate and job (if any).
+   * GET /tailored-resume/:jobId
+   */
+  async getTailoredResumeForJob(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const jobId = req.params.jobId;
+      if (!jobId) return res.status(400).json({ message: 'jobId is required' });
+      const candidate = await Candidate.findOne({ where: { user_id: userId } });
+      if (!candidate) return res.status(404).json({ message: 'Candidate profile not found' });
+      const record = await TailoredResume.findOne({
+        where: { candidate_id: candidate.id, job_id: jobId },
+      });
+      if (!record) return res.status(404).json({ message: 'No tailored resume saved for this job' });
+      let structuredResume: unknown = null;
+      if (record.structured_resume) {
+        try {
+          structuredResume = JSON.parse(record.structured_resume);
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      return res.json({
+        tailoredCvText: record.tailored_cv_text,
+        structuredResume: structuredResume ?? undefined,
+      });
+    } catch (error: any) {
+      console.error('[AI] getTailoredResumeForJob failed:', error.message);
+      return res.status(500).json({ message: error.message || 'Failed to get tailored resume' });
+    }
+  }
+
+  /**
+   * Export tailored resume as PDF using a professional template (Canva/Overleaf style).
+   * Body: { tailoredCvText: string, useOriginalTemplate?: boolean } — if useOriginalTemplate is true, uses candidate's uploaded CV as base.
+   */
+  async exportTailoredResumeWithTemplate(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { tailoredCvText, useOriginalTemplate, structuredResume } = req.body || {};
+      if (!tailoredCvText || typeof tailoredCvText !== 'string') {
+        return res.status(400).json({ message: 'tailoredCvText is required' });
+      }
+
+      const trimmed = tailoredCvText.trim();
+      let buffer: Buffer;
+
+      if (useOriginalTemplate) {
+        const candidate = await Candidate.findOne({ where: { user_id: userId } });
+        if (!candidate) return res.status(404).json({ message: 'Candidate profile not found' });
+        const originalPath = await getCvFilePathForCandidate(candidate.id);
+        buffer = await buildPdfFromOriginalTemplate(originalPath, trimmed);
+      } else if (structuredResume && typeof structuredResume === 'object' && structuredResume.name != null) {
+        buffer = await buildPdfFromStructuredResume(structuredResume as StructuredResumeData);
+      } else {
+        buffer = await buildPdfWithProfessionalTemplate(trimmed);
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="tailored-resume.pdf"');
+      res.send(buffer);
+    } catch (error: any) {
+      console.error('[AI] exportTailoredResumeWithTemplate failed:', error.message);
+      if (error.message?.includes('not found')) {
+        return res.status(404).json({ message: error.message });
+      }
+      return res.status(500).json({ message: error.message || 'PDF export failed' });
+    }
+  }
+
   // ============================================================
   //  6.3  Cover Letter Writer (Candidate)
   // ============================================================
@@ -99,15 +462,25 @@ export class AiController {
       const cvText = await getCvTextForCandidate(candidate.id);
       const companyName = (job as any).companyProfile?.company_name || job.company || 'the company';
 
-      const result = await qwenService.generateCoverLetter(
-        cvText,
-        job.title,
-        job.description,
-        companyName,
-        tone || 'formal'
-      );
-
-      return res.json(result);
+      try {
+        const result = await qwenService.generateCoverLetter(
+          cvText,
+          job.title,
+          job.description,
+          companyName,
+          tone || 'formal'
+        );
+        return res.json(result);
+      } catch (qwenError: any) {
+        const msg = qwenError?.message || '';
+        if (msg.includes('not configured') || msg.includes('API_KEY') || msg.includes('API key')) {
+          return res.status(200).json({
+            coverLetter: 'AI cover letter is not available because no API key is set.\n\nTo enable it: add ALIBABA_LLM_API_KEY to the server .env file (in the job-matcher folder) and restart the app. You can get a free key at https://modelstudio.console.alibabacloud.com/\n\nYou can write your cover letter above and apply without AI.',
+            alternateVersions: [],
+          });
+        }
+        throw qwenError;
+      }
     } catch (error: any) {
       console.error('[AI] Cover letter generation failed:', error.message);
       return res.status(500).json({ message: error.message || 'Cover letter generation failed' });

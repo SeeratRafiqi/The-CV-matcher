@@ -20,6 +20,7 @@ import {
   SavedJob,
   CompanyMember,
   CoverLetter,
+  TailoredResume,
   InterviewAssessment,
   InterviewQuestion,
   InterviewAttempt,
@@ -88,6 +89,10 @@ async function migrate() {
     // (e.g. "Too many keys" on MySQL).
     // ===================================================================
 
+    const dialect = sequelize.getDialect();
+    const isSqlite = dialect === 'sqlite';
+    const useAlter = !isSqlite; // SQLite has limited ALTER support; just create tables
+
     const models = [
       { name: 'User', model: User, table: 'users' },
       { name: 'Candidate', model: Candidate, table: 'candidates' },
@@ -109,6 +114,7 @@ async function migrate() {
       { name: 'SavedJob', model: SavedJob, table: 'saved_jobs' },
       { name: 'CompanyMember', model: CompanyMember, table: 'company_members' },
       { name: 'CoverLetter', model: CoverLetter, table: 'cover_letters' },
+      { name: 'TailoredResume', model: TailoredResume, table: 'tailored_resumes' },
       { name: 'InterviewAssessment', model: InterviewAssessment, table: 'interview_assessments' },
       { name: 'InterviewQuestion', model: InterviewQuestion, table: 'interview_questions' },
       { name: 'InterviewAttempt', model: InterviewAttempt, table: 'interview_attempts' },
@@ -123,10 +129,10 @@ async function migrate() {
         console.log(`  ✓ ${name} table recreated`);
       }
     } else {
-      console.log('\nSyncing tables (alter: true with fallback)...');
+      console.log('\nSyncing tables (' + (useAlter ? 'alter: true with fallback' : 'create-only for SQLite') + ')...');
       for (const { name, model, table } of models) {
         try {
-          await model.sync({ alter: true });
+          await model.sync({ alter: useAlter });
           console.log(`  ✓ ${name} table synced`);
         } catch (error: any) {
           const msg = error.message || '';
@@ -160,10 +166,12 @@ async function migrate() {
     }
 
     // ===================================================================
-    // STEP 2: SCHEMA PATCHES (safe to re-run, all idempotent)
+    // STEP 2: SCHEMA PATCHES (MySQL only; safe to re-run, all idempotent)
     // These handle ENUM changes and columns that `alter: true` may miss.
+    // Skip for SQLite — sync() above is sufficient and raw SQL is MySQL-specific.
     // ===================================================================
-    console.log('\nApplying schema patches...');
+    if (!isSqlite) {
+      console.log('\nApplying schema patches...');
 
     // ---------- users ----------
     console.log('\n[users]');
@@ -263,6 +271,12 @@ async function migrate() {
     await addColumn('applications', 'cover_letter',
       `ALTER TABLE applications ADD COLUMN cover_letter TEXT NULL`
     );
+    await addColumn('applications', 'cv_type',
+      `ALTER TABLE applications ADD COLUMN cv_type VARCHAR(20) NULL DEFAULT 'original'`
+    );
+    await addColumn('applications', 'submitted_cv_text',
+      `ALTER TABLE applications ADD COLUMN submitted_cv_text TEXT NULL`
+    );
     await addColumn('applications', 'notes',
       `ALTER TABLE applications ADD COLUMN notes JSON NULL`
     );
@@ -332,6 +346,14 @@ async function migrate() {
     await addIndex('cover_letters', 'idx_cover_letters_candidate_job',
       `ALTER TABLE cover_letters ADD INDEX idx_cover_letters_candidate_job (candidate_id, job_id)`
     );
+
+    } // end if (!isSqlite)
+
+    // SQLite: add application CV fields if missing
+    if (isSqlite) {
+      await addColumn('applications', 'cv_type', `ALTER TABLE applications ADD COLUMN cv_type TEXT DEFAULT 'original'`);
+      await addColumn('applications', 'submitted_cv_text', `ALTER TABLE applications ADD COLUMN submitted_cv_text TEXT`);
+    }
 
     // ===================================================================
     // DONE

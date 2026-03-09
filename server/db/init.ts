@@ -17,8 +17,9 @@ export async function initializeDatabase() {
   }
 
   try {
-    // Create database if enabled
-    if (AUTO_CREATE_DB) {
+    // Create database if enabled (MySQL only; skip for SQLite)
+    const useSqlite = process.env.USE_SQLITE !== 'false' && !process.env.DATABASE_URL && !process.env.DB_HOST;
+    if (AUTO_CREATE_DB && !useSqlite) {
       try {
         await execAsync('npm run db:create');
         console.log('✅ Database ready');

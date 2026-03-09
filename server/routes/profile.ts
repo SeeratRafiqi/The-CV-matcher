@@ -86,6 +86,20 @@ router.post(
   (req, res) => profileController.uploadCandidatePhoto(req as any, res)
 );
 
+router.delete(
+  '/candidate/profile/photo',
+  authenticateToken,
+  requireCandidate,
+  (req, res) => profileController.deleteCandidatePhoto(req as any, res)
+);
+
+router.post(
+  '/candidate/profile/photo/remove',
+  authenticateToken,
+  requireCandidate,
+  (req, res) => profileController.deleteCandidatePhoto(req as any, res)
+);
+
 // ==================== CANDIDATE CV UPLOAD (self) ====================
 const cvStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, cvsDir),

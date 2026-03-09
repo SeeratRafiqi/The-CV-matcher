@@ -260,7 +260,12 @@ export default function CandidateInterviewAssessment() {
                   Next
                 </Button>
                 <Button
-                  onClick={() => submitMutation.mutate(false)}
+                  onClick={() => {
+                    const confirmed = window.confirm(
+                      'Are you sure you want to submit your assessment? You cannot change your answers after submitting.'
+                    );
+                    if (confirmed) submitMutation.mutate(false);
+                  }}
                   disabled={submitMutation.isPending}
                   className="gap-2"
                 >

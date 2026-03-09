@@ -84,18 +84,18 @@ export class QwenService {
   }
 
   constructor() {
-    this.apiKey = process.env.ALIBABA_LLM_API_KEY || '';
+    this.apiKey = process.env.ALIBABA_LLM_API_KEY || process.env.DASHSCOPE_API_KEY || '';
     this.apiUrl = process.env.ALIBABA_LLM_API_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
     this.model = process.env.QWEN_MODEL || 'qwen-turbo';
 
     if (!this.apiKey) {
-      console.warn('ALIBABA_LLM_API_KEY not set. Qwen service will not work.');
+      console.warn('ALIBABA_LLM_API_KEY (or DASHSCOPE_API_KEY) not set. AI features disabled.');
     }
   }
 
   private async callQwen(prompt: string, jsonMode: boolean = true): Promise<string> {
     if (!this.apiKey) {
-      throw new Error('QWEN_API_KEY not configured');
+      throw new Error('ALIBABA_LLM_API_KEY not configured. Set it in .env for AI features.');
     }
 
     let lastError: Error | null = null;
@@ -1022,14 +1022,16 @@ Return a JSON object:
       "improved": "Engineered a scalable backend system serving 10K+ daily requests"
     }
   ],
-  "summary": "2-3 sentence overall assessment"
+  "summary": "2-3 sentence overall assessment",
+  "revisedCvText": "Full CV text from above with every 'original' in rewrittenBullets replaced by its 'improved' version. Same structure and line breaks; use \\n for newlines in this JSON string."
 }
 
-Provide 3-6 sections of feedback and 3-8 rewritten bullet points from the CV.
-Return ONLY valid JSON, no additional text.`;
+You MUST include "revisedCvText": copy the entire CV TEXT from the input, then replace each original bullet with its improved version from rewrittenBullets. This allows the user to download the improved CV.
+Provide 3-6 sections and 3-8 rewritten bullets. Return ONLY valid JSON.`;
 
     const response = await this.callQwen(prompt, true);
-    return JSON.parse(response);
+    const parsed = JSON.parse(response);
+    return parsed;
   }
 
   /**
@@ -1078,6 +1080,91 @@ Return JSON:
 }
 
 Return ONLY valid JSON.`;
+
+    const response = await this.callQwen(prompt, true);
+    return JSON.parse(response);
+  }
+
+  /**
+   * 6.2b — Tailor CV for job: same template, reorder + remove irrelevant. No fabrication.
+   * Keeps the exact template (sections, headings, layout). Reorders content by job relevance and removes irrelevant items.
+   */
+  async tailorCVReordered(
+    cvText: string,
+    jobTitle: string,
+    jobDescription: string,
+    jobSkills: string[]
+  ): Promise<{ tailoredCvText: string; keyChanges: string[] }> {
+    const prompt = `You are a career advisor. Customize the candidate's CV for this specific job.
+
+=== CANDIDATE'S ORIGINAL CV ===
+${cvText.substring(0, 12000)}
+
+=== TARGET JOB ===
+Title: ${jobTitle}
+Description: ${jobDescription.substring(0, 3000)}
+Key skills: ${jobSkills.join(', ')}
+
+Your task: Produce a tailored CV that keeps the SAME TEMPLATE as the original (same section titles, same order of sections, same formatting and style) but:
+1. REORDER within each section so job-relevant content comes first (e.g. if the job is Java developer, put Java at the top of Skills, Java-related projects first in Projects/Experience).
+2. REMOVE content that is not relevant to this job (e.g. unrelated roles like "food critic", irrelevant hobbies, skills that don't match the job). Omit entire bullets or entries that don't help for this role. Do not keep filler just to fill space.
+3. Keep the exact same structure: same section headers, same bullet style, same line breaks. Only the content inside each section is reordered or trimmed (irrelevant items removed).
+4. DO NOT add or invent anything. Only use content that appears in the original CV. Only reorder and remove—never add new facts, skills, or jobs.
+
+Output the full tailored CV as one string. Use \\n for newlines in tailoredCvText. In keyChanges, list briefly what you did (e.g. "Moved Java and Spring to top of Skills", "Removed unrelated food critic role", "Put Java project first in Projects").
+
+Return ONLY valid JSON:
+{
+  "tailoredCvText": "<full tailored CV string, same template as original, \\n for newlines>",
+  "keyChanges": ["What you reordered", "What you removed", "etc."]
+}`;
+
+    const response = await this.callQwen(prompt, true);
+    return JSON.parse(response);
+  }
+
+  /**
+   * Extract structured resume from improved/tailored CV text for template-based rendering.
+   * Returns: header (name, email, phone, linkedIn, portfolio), summary, skills, experience, education, projects, certifications.
+   */
+  async extractStructuredResume(cvText: string): Promise<{
+    name: string;
+    email: string;
+    phone: string;
+    linkedIn: string;
+    portfolio: string;
+    summary: string;
+    skills: string[];
+    experience: { role: string; company: string; dates?: string; bullets: string[] }[];
+    education: { degree: string; institution: string; dates?: string }[];
+    projects: { name: string; description?: string; bullets?: string[] }[];
+    certifications: string[];
+  }> {
+    const prompt = `You are a resume parser. Extract the following resume content into a structured JSON. Use ONLY information that appears in the text. Do not invent anything.
+
+=== RESUME TEXT ===
+${cvText.substring(0, 10000)}
+
+Return ONLY valid JSON with this exact structure (use empty strings or empty arrays if not found):
+{
+  "name": "Full name as shown",
+  "email": "email address or empty string",
+  "phone": "phone or empty string",
+  "linkedIn": "LinkedIn URL or empty string",
+  "portfolio": "portfolio/website URL or empty string",
+  "summary": "Professional summary / profile paragraph (one string, can be multi-line with \\n)",
+  "skills": ["skill1", "skill2", ...],
+  "experience": [
+    { "role": "Job title", "company": "Company name", "dates": "e.g. 2020 - Present", "bullets": ["achievement one", "achievement two"] }
+  ],
+  "education": [
+    { "degree": "Degree name", "institution": "School name", "dates": "e.g. 2018 - 2020" }
+  ],
+  "projects": [
+    { "name": "Project name", "description": "optional short description", "bullets": ["optional bullet"] }
+  ],
+  "certifications": ["cert1", "cert2"]
+}`;
 
     const response = await this.callQwen(prompt, true);
     return JSON.parse(response);

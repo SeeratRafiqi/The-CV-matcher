@@ -1,3 +1,11 @@
+// Polyfill crypto.hash for Node 18 (required by Vite 7)
+import crypto from "node:crypto";
+const createHash = crypto.createHash.bind(crypto);
+if (typeof (crypto as any).hash !== "function") {
+  (crypto as any).hash = (algorithm: string, data: string | Buffer | ArrayBufferView, encoding?: string) =>
+    createHash(algorithm).update(Buffer.from(data as Buffer)).digest(encoding || "hex");
+}
+
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -101,6 +109,7 @@ app.use((req, res, next) => {
 
   // Create body parsers
   const jsonParser = express.json({
+    limit: '2mb', // allow large payloads (e.g. improved CV text for PDF export)
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },

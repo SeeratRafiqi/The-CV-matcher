@@ -16,6 +16,9 @@ vite.config.ts.*
 # Uploads (user-generated content)
 uploads/
 
+# SQLite database (when using SQLite fallback)
+data/
+
 # IDE
 .vscode/
 .idea/

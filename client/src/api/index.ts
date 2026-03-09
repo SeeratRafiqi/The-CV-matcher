@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiUpload, setAuthToken } from '@/lib/apiClient';
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiUpload, setAuthToken, API_BASE_URL } from '@/lib/apiClient';
 import type {
   Candidate,
   CandidateProfile,
@@ -83,6 +83,10 @@ export async function uploadCandidatePhoto(file: File): Promise<{ photoUrl: stri
   const formData = new FormData();
   formData.append('photo', file);
   return apiUpload<{ photoUrl: string }>('/candidate/profile/photo', formData);
+}
+
+export async function deleteCandidatePhoto(): Promise<{ message: string }> {
+  return apiPost<{ message: string }>('/candidate/profile/photo/remove', {});
 }
 
 /**
@@ -410,8 +414,17 @@ export async function getJobPublic(id: string): Promise<Job & { match?: any; app
 }
 
 // ==================== APPLICATIONS (candidate) ====================
-export async function applyToJob(jobId: string, coverLetter?: string): Promise<Application> {
-  return apiPost<Application>('/applications', { jobId, coverLetter });
+export async function applyToJob(
+  jobId: string,
+  coverLetter?: string,
+  options?: { cvType?: 'original' | 'tailored'; tailoredCvText?: string }
+): Promise<Application> {
+  return apiPost<Application>('/applications', {
+    jobId,
+    coverLetter,
+    cvType: options?.cvType,
+    tailoredCvText: options?.tailoredCvText,
+  });
 }
 
 export async function getMyApplications(status?: string): Promise<Application[]> {
@@ -705,6 +718,8 @@ export async function refreshToken(): Promise<{ token: string }> {
 import type {
   CvReviewResult,
   CvTailorResult,
+  TailorCvReorderedResult,
+  TailorResumeForJobResult,
   CoverLetterResult,
   CoverLetterTone,
   JobPostingReviewResult,
@@ -721,9 +736,80 @@ export async function reviewCv(targetRole?: string): Promise<CvReviewResult> {
   return apiPost<CvReviewResult>('/ai/cv-review', { targetRole });
 }
 
+/** Get full revised CV text: your uploaded CV with suggested bullet lines replaced. */
+export async function getRevisedCvText(rewrittenBullets: { original: string; improved: string }[]): Promise<{ revisedCvText: string }> {
+  return apiPost<{ revisedCvText: string }>('/ai/cv-review/revised-text', { rewrittenBullets });
+}
+
+/** Request improved CV as PDF (after AI CV Review). Returns blob to download. */
+export async function exportCvReviewPdf(revisedCvText: string): Promise<Blob> {
+  const url = `${API_BASE_URL}/ai/cv-review/export-pdf`;
+  const token = localStorage.getItem('auth_token');
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    credentials: 'include',
+    body: JSON.stringify({ revisedCvText }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(err.message || 'Failed to generate PDF');
+  }
+  return res.blob();
+}
+
 // 6.2 — CV Tailor
 export async function tailorCv(jobId: string): Promise<CvTailorResult> {
   return apiPost<CvTailorResult>('/ai/tailor-cv', { jobId });
+}
+
+/** Tailor CV for job: same content reordered (no fabrication). Returns tailoredCvText + keyChanges. */
+export async function tailorCvReordered(jobId: string): Promise<TailorCvReorderedResult> {
+  return apiPost<TailorCvReorderedResult>('/ai/tailor-cv/reordered', { jobId });
+}
+
+/** Tailor resume for job: apply suggestions + reorder for role. No fabrication. Saves to DB. */
+export async function tailorResumeForJob(jobId: string): Promise<TailorResumeForJobResult> {
+  return apiPost<TailorResumeForJobResult>('/ai/tailor-resume-for-job', { jobId });
+}
+
+/** Get saved tailored resume for this job (if any). Returns null on 404. */
+export async function getTailoredResumeForJob(
+  jobId: string
+): Promise<{ tailoredCvText: string; structuredResume?: import('@/types').StructuredResume } | null> {
+  try {
+    return await apiGet<{ tailoredCvText: string; structuredResume?: import('@/types').StructuredResume }>(
+      `/ai/tailor-resume-for-job/${encodeURIComponent(jobId)}`
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Export tailored resume as PDF (template-based when structuredResume is provided). */
+export async function exportTailoredResumePdf(
+  tailoredCvText: string,
+  structuredResume?: import('@/types').StructuredResume | null
+): Promise<Blob> {
+  const url = `${API_BASE_URL}/ai/tailor-resume-for-job/export-pdf`;
+  const token = localStorage.getItem('auth_token');
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ tailoredCvText, structuredResume: structuredResume ?? undefined }),
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(err.message || 'Export failed');
+  }
+  return res.blob();
 }
 
 // 6.3 — Cover Letter

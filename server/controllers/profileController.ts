@@ -8,7 +8,7 @@ import { BaseController } from '../db/base/BaseController.js';
 import type { AuthRequest } from '../middleware/auth.js';
 import { randomUUID } from 'crypto';
 import path from 'path';
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, unlinkSync } from 'fs';
 import { pdfParserService } from '../services/pdfParser.js';
 import { qwenService } from '../services/qwen.js';
 import { matchController } from './matchController.js';
@@ -29,18 +29,8 @@ export class ProfileController extends BaseController {
       const candidate = await Candidate.findOne({
         where: { user_id: req.user.id },
         include: [
-          {
-            model: CvFile,
-            as: 'cvFiles',
-            order: [['uploaded_at', 'DESC']],
-            limit: 1,
-          },
-          {
-            model: CandidateMatrix,
-            as: 'matrices',
-            order: [['generated_at', 'DESC']],
-            limit: 1,
-          },
+          { model: CvFile, as: 'cvFiles' },
+          { model: CandidateMatrix, as: 'matrices' },
         ],
       });
 
@@ -50,8 +40,15 @@ export class ProfileController extends BaseController {
         throw error;
       }
 
-      const cvFile = (candidate as any).cvFiles?.[0] || null;
-      const matrix = (candidate as any).matrices?.[0] || null;
+      const cvFiles = (candidate as any).cvFiles || [];
+      const cvFile = cvFiles.sort((a: any, b: any) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime())[0] || null;
+      const matrices = (candidate as any).matrices || [];
+      const matrix = matrices.sort((a: any, b: any) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime())[0] || null;
+
+      const rawSkills = matrix?.skills;
+      const skills = Array.isArray(rawSkills)
+        ? rawSkills.map((s: any) => (typeof s === 'string' ? { name: s } : { name: s?.name || String(s) })).filter((s: any) => s.name)
+        : [];
 
       return {
         id: candidate.id,
@@ -76,14 +73,14 @@ export class ProfileController extends BaseController {
         } : null,
         matrix: matrix ? {
           id: matrix.id,
-          skills: matrix.skills,
-          roles: matrix.roles,
-          totalYearsExperience: matrix.total_years_experience,
-          domains: matrix.domains,
-          education: matrix.education,
-          languages: matrix.languages,
-          locationSignals: matrix.location_signals,
-          confidence: matrix.confidence,
+          skills,
+          roles: matrix.roles || [],
+          totalYearsExperience: matrix.total_years_experience ?? 0,
+          domains: matrix.domains || [],
+          education: matrix.education || [],
+          languages: matrix.languages || [],
+          locationSignals: matrix.location_signals || {},
+          confidence: matrix.confidence ?? 0,
           generatedAt: matrix.generated_at,
         } : null,
       };
@@ -155,6 +152,47 @@ export class ProfileController extends BaseController {
       await candidate.update({ photo_url: photoUrl, updated_at: new Date() });
 
       return { photoUrl, message: 'Photo uploaded successfully' };
+    });
+  }
+
+  async deleteCandidatePhoto(req: AuthRequest, res: Response) {
+    await this.handleRequest(req, res, async () => {
+      if (!req.user) {
+        const error: any = new Error('Authentication required');
+        error.status = 401;
+        throw error;
+      }
+
+      const candidate = await Candidate.findOne({ where: { user_id: req.user.id } });
+      if (!candidate) {
+        const error: any = new Error('Candidate profile not found');
+        error.status = 404;
+        throw error;
+      }
+
+      const photoUrl = candidate.photo_url;
+      if (!photoUrl) {
+        return { message: 'No profile photo to remove' };
+      }
+
+      // Optional: delete file from disk (e.g. /uploads/photos/filename.ext or full URL)
+      const match = photoUrl.match(/\/uploads\/photos\/([^/?#]+)$/);
+      if (match) {
+        const filename = match[1];
+        const photosDir = path.join(process.cwd(), 'uploads', 'photos');
+        const filePath = path.join(photosDir, filename);
+        if (existsSync(filePath)) {
+          try {
+            unlinkSync(filePath);
+          } catch (_) {
+            // ignore if file already missing
+          }
+        }
+      }
+
+      await candidate.update({ photo_url: null, updated_at: new Date() });
+      await candidate.reload(); // ensure in-memory instance is updated
+      return { message: 'Profile photo removed' };
     });
   }
 
@@ -294,8 +332,13 @@ export class ProfileController extends BaseController {
 
       console.log(`[CvProcess] Extracted ${cvText.length} chars. Generating matrix via AI...`);
 
-      // Generate matrix using Qwen
-      const matrixData = await qwenService.generateCandidateMatrix(cvText);
+      let matrixData: any;
+      try {
+        matrixData = await qwenService.generateCandidateMatrix(cvText);
+      } catch (qwenError: any) {
+        console.warn(`[CvProcess] Qwen unavailable (${qwenError?.message || qwenError}). Creating fallback matrix.`);
+        matrixData = this.buildFallbackMatrixFromText(cvText);
+      }
 
       // Delete any old matrices for this candidate (keep latest only)
       await CandidateMatrix.destroy({ where: { candidate_id: candidateId } });
@@ -307,14 +350,14 @@ export class ProfileController extends BaseController {
         cv_file_id: cvFileId,
         skills: matrixData.skills || [],
         roles: matrixData.roles || [],
-        total_years_experience: matrixData.totalYearsExperience || 0,
+        total_years_experience: matrixData.totalYearsExperience ?? 0,
         domains: matrixData.domains || [],
         education: matrixData.education || [],
         languages: matrixData.languages || [],
         location_signals: matrixData.locationSignals || {},
-        confidence: matrixData.confidence || 0,
+        confidence: matrixData.confidence ?? 0,
         evidence: matrixData.evidence || [],
-        qwen_model_version: qwenService.getModelVersion(),
+        qwen_model_version: matrixData.qwen_model_version || qwenService.getModelVersion?.() || 'fallback',
       });
 
       // Update CV file status
@@ -341,6 +384,47 @@ export class ProfileController extends BaseController {
         await cvFile.update({ status: 'failed' });
       }
     }
+  }
+
+  /** Fallback when Qwen API is not configured: build a minimal matrix from CV text */
+  private buildFallbackMatrixFromText(cvText: string): any {
+    const text = (cvText || '').slice(0, 8000);
+    const skills: { name: string; level?: string; yearsOfExperience?: number }[] = [];
+    const skillKeywords = /\b(skills?|technical|technologies|tools|programming)\s*[:\-]\s*([^\n]+)/gi;
+    let m: RegExpExecArray | null;
+    while ((m = skillKeywords.exec(text)) !== null) {
+      const part = m[2].replace(/[,;|]/g, ' ').split(/\s+/).filter((s) => s.length > 1 && s.length < 40);
+      for (const word of part) {
+        const name = word.replace(/[^\w\s\+#\.]/g, '').trim();
+        if (name && !skills.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+          skills.push({ name, level: 'intermediate', yearsOfExperience: 0 });
+        }
+      }
+    }
+    if (skills.length === 0) {
+      const words = text.split(/\s+/).filter((w) => w.length >= 3 && w.length <= 25 && /[A-Za-z]/.test(w));
+      const seen = new Set<string>();
+      for (const w of words.slice(0, 200)) {
+        const name = w.replace(/[^\w\+#\.]/g, '');
+        if (name.length >= 3 && !seen.has(name.toLowerCase())) {
+          seen.add(name.toLowerCase());
+          skills.push({ name, level: 'beginner', yearsOfExperience: 0 });
+          if (skills.length >= 15) break;
+        }
+      }
+    }
+    return {
+      skills,
+      roles: ['Professional'],
+      totalYearsExperience: 0,
+      domains: [],
+      education: [],
+      languages: [],
+      locationSignals: {},
+      confidence: skills.length > 0 ? 30 : 0,
+      evidence: [],
+      qwen_model_version: 'fallback',
+    };
   }
 
   /**

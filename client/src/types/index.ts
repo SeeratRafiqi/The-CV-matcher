@@ -215,12 +215,16 @@ export type ApplicationStatus =
   | 'rejected'
   | 'withdrawn';
 
+export type CvType = 'original' | 'tailored';
+
 export interface Application {
   id: string;
   candidateId: string;
   jobId: string;
   status: ApplicationStatus;
   coverLetter?: string;
+  cvType?: CvType;
+  submittedCvText?: string | null;
   appliedAt: string;
   updatedAt: string;
   matchScore?: number | null;
@@ -571,12 +575,44 @@ export interface CvReviewResult {
   sections: { section: string; issues: string[]; suggestions: string[] }[];
   rewrittenBullets: { original: string; improved: string }[];
   summary: string;
+  /** Improved CV text (original with AI bullet replacements). Present when rewrittenBullets were applied. */
+  revisedCvText?: string;
 }
 
 export interface CvTailorResult {
   tailoredSections: { section: string; changes: string[] }[];
   keyChanges: string[];
   matchImprovement: { before: number; after: number };
+}
+
+/** Result of tailor-CV reordered: same content, reordered for job. No fabrication. */
+export interface TailorCvReorderedResult {
+  tailoredCvText: string;
+  keyChanges: string[];
+}
+
+/** Result of tailor-resume-for-job: suggestions applied + reordered for job. */
+export interface TailorResumeForJobResult {
+  tailoredCvText: string;
+  keyChanges: string[];
+  jobTitle: string;
+  /** Structured resume for template-based PDF and preview (if extraction succeeded). */
+  structuredResume?: StructuredResume | null;
+}
+
+/** Structured resume for template rendering (header, sections, bullets). */
+export interface StructuredResume {
+  name: string;
+  email: string;
+  phone: string;
+  linkedIn: string;
+  portfolio: string;
+  summary: string;
+  skills: string[];
+  experience: { role: string; company: string; dates?: string; bullets: string[] }[];
+  education: { degree: string; institution: string; dates?: string }[];
+  projects: { name: string; description?: string; bullets?: string[] }[];
+  certifications: string[];
 }
 
 export interface CoverLetterResult {

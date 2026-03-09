@@ -7,6 +7,24 @@ import { CompanyProfile } from '../db/models/CompanyProfile.js';
 import { BaseController } from '../db/base/BaseController.js';
 import type { AuthRequest, UserRole } from '../middleware/auth.js';
 
+/** Return a user-friendly message when the error is a DB connection failure (e.g. MySQL not running). */
+function normalizeDbError(error: any): { message: string; status: number } {
+  const msg = error?.message || '';
+  const isConnectionRefused =
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('connect ECONNREFUSED') ||
+    (error?.name === 'SequelizeConnectionRefusedError') ||
+    (error?.name === 'SequelizeConnectionError');
+  if (isConnectionRefused) {
+    return {
+      message:
+        'Database is not available. The app requires MySQL. Start MySQL and set DATABASE_URL (or DB_HOST/DB_PORT/DB_USER/DB_PASSWORD) in .env, or see TROUBLESHOOTING.md.',
+      status: 503,
+    };
+  }
+  return { message: msg || 'Internal server error', status: error?.status || error?.statusCode || 500 };
+}
+
 function generateUUID(): string {
   // Simple UUID v4 generator (no external dependency needed)
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -21,7 +39,19 @@ export class AuthController extends BaseController {
 
   async register(req: Request, res: Response) {
     await this.handleRequest(req, res, async () => {
-      const { email, password, name, role } = req.body;
+      try {
+        return await this.doRegister(req);
+      } catch (err: any) {
+        const { message, status } = normalizeDbError(err);
+        const e: any = new Error(message);
+        e.status = status;
+        throw e;
+      }
+    });
+  }
+
+  private async doRegister(req: Request) {
+    const { email, password, name, role } = req.body;
 
       // Validate required fields
       if (!email || !password || !name || !role) {
@@ -118,12 +148,23 @@ export class AuthController extends BaseController {
           role: user.role,
         },
       };
-    });
   }
 
   async login(req: Request, res: Response) {
     await this.handleRequest(req, res, async () => {
-      const { email, username, password } = req.body;
+      try {
+        return await this.doLogin(req);
+      } catch (err: any) {
+        const { message, status } = normalizeDbError(err);
+        const e: any = new Error(message);
+        e.status = status;
+        throw e;
+      }
+    });
+  }
+
+  private async doLogin(req: Request) {
+    const { email, username, password } = req.body;
 
       // Support both email and username login
       const loginIdentifier = email || username;
@@ -176,7 +217,6 @@ export class AuthController extends BaseController {
           role: user.role,
         },
       };
-    });
   }
 
   async logout(req: Request, res: Response) {

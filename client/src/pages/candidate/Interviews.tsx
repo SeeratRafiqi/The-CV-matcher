@@ -23,6 +23,20 @@ const statusVariant: Record<InterviewAssessmentStatus, 'default' | 'secondary' |
   expired: 'destructive',
 };
 
+const voiceStatusLabel: Record<VoiceInterviewStatus, string> = {
+  assigned: 'Not started',
+  in_progress: 'In progress',
+  completed: 'Completed',
+  expired: 'Expired',
+};
+
+const voiceStatusVariant: Record<VoiceInterviewStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  assigned: 'secondary',
+  in_progress: 'default',
+  completed: 'default',
+  expired: 'destructive',
+};
+
 function formatDuration(seconds: number) {
   const safe = Math.max(0, seconds);
   const h = Math.floor(safe / 3600);
@@ -56,9 +70,9 @@ export default function CandidateInterviews() {
         </div>
       ) : assessments.length === 0 ? (
         <Card>
-          <CardContent className="py-16 text-center">
+          <CardContent className="py-12 text-center">
             <FileText className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
-            <p className="text-muted-foreground">No interview assessments assigned yet.</p>
+            <p className="text-muted-foreground">No behavior assessments assigned yet.</p>
           </CardContent>
         </Card>
       ) : (

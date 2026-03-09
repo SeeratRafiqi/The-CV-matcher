@@ -141,7 +141,7 @@ export default function SkillGapAnalysis() {
           </div>
 
           {/* Recommendations */}
-          {result.recommendations.length > 0 && (
+          {result.recommendations?.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">

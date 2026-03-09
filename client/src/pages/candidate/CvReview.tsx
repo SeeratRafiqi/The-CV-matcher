@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { reviewCv, getRecommendedJobs, getCandidateProfile } from '@/api';
+import { reviewCv, getRevisedCvText, getRecommendedJobs, getCandidateProfile, getJobPublic, tailorResumeForJob, exportTailoredResumePdf, exportCvReviewPdf } from '@/api';
+import { htmlElementToPdfBlob } from '@/lib/pdfExport';
+import { populateResumeTemplate } from '@/lib/resumeTemplate';
 import { useAuthStore } from '@/store/auth';
-import type { CvReviewResult } from '@/types';
+import type { CvReviewResult, StructuredResume } from '@/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,6 +29,7 @@ import {
   Loader2,
   Briefcase,
   MapPin,
+  Download,
 } from 'lucide-react';
 import { Link } from 'wouter';
 import { getCountryFromCode } from '@/utils/helpers';
@@ -37,6 +40,41 @@ export default function CvReview() {
   const [targetRole, setTargetRole] = useState('');
   const [selectedJobId, setSelectedJobId] = useState('');
   const [result, setResult] = useState<CvReviewResult | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [tailoredCvText, setTailoredCvText] = useState<string | null>(null);
+  const [tailorKeyChanges, setTailorKeyChanges] = useState<string[]>([]);
+  const [tailorJobTitle, setTailorJobTitle] = useState('');
+  const [structuredResume, setStructuredResume] = useState<StructuredResume | null>(null);
+  const resumePreviewRef = useRef<HTMLDivElement>(null);
+
+  const jobIdFromUrl = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('jobId') : null;
+
+  const { data: jobForTailor } = useQuery({
+    queryKey: ['job-public', jobIdFromUrl],
+    queryFn: () => getJobPublic(jobIdFromUrl!),
+    enabled: !!jobIdFromUrl,
+  });
+
+  useEffect(() => {
+    if (jobForTailor && jobIdFromUrl) {
+      setSelectedJobId(jobIdFromUrl);
+      setTargetRole(jobForTailor.title);
+    }
+  }, [jobForTailor?.title, jobIdFromUrl]);
+
+  const tailorMutation = useMutation({
+    mutationFn: () => tailorResumeForJob(jobIdFromUrl!),
+    onSuccess: (data) => {
+      setTailoredCvText(data.tailoredCvText);
+      setTailorKeyChanges(data.keyChanges || []);
+      setTailorJobTitle(data.jobTitle || '');
+      setStructuredResume(data.structuredResume ?? null);
+      toast({ title: 'Tailored resume ready', description: 'Review the formatted preview below and download when ready.' });
+    },
+    onError: (err: any) => {
+      toast({ title: 'Tailoring failed', description: err?.message || 'Please try again.', variant: 'destructive' });
+    },
+  });
 
   // Get candidate profile
   const { data: profile } = useQuery({
@@ -80,7 +118,11 @@ export default function CvReview() {
     mutationFn: () => reviewCv(targetRole || undefined),
     onSuccess: (data) => {
       setResult(data);
-      toast({ title: 'CV Review Complete', description: `Your CV scored ${data.score}/100` });
+      const isFallback = data.score === 0 && (data.summary?.includes('API key') || data.summary?.includes('not available'));
+      toast({
+        title: isFallback ? 'AI Review Unavailable' : 'CV Review Complete',
+        description: isFallback ? 'Set ALIBABA_LLM_API_KEY in .env to enable AI review.' : `Your CV scored ${data.score}/100`,
+      });
     },
     onError: (err: any) => {
       toast({ title: 'Review Failed', description: err.message, variant: 'destructive' });
@@ -113,6 +155,112 @@ export default function CvReview() {
           Get actionable suggestions to improve your CV with AI-powered analysis.
         </p>
       </div>
+
+      {/* Tailor resume for job (when opened from Browse Jobs with ?jobId=) */}
+      {jobIdFromUrl && jobForTailor && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <FileSearch className="w-5 h-5 text-primary" />
+              Tailoring your resume for: {jobForTailor.title}
+            </CardTitle>
+            <CardDescription>
+              We analyze the job description and your resume, then restructure your resume to better match the role:
+              reorder sections by relevance, improve bullet clarity, and highlight relevant skills. No information is
+              added—only your existing content is reorganized and refined. Your original resume is preserved.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!tailoredCvText ? (
+              <Button
+                onClick={() => tailorMutation.mutate()}
+                disabled={tailorMutation.isPending}
+                className="gap-2"
+              >
+                {tailorMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Generating tailored resume…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    Generate tailored resume
+                  </>
+                )}
+              </Button>
+            ) : (
+              <>
+                {tailorKeyChanges.length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium mb-1.5">What we changed</p>
+                    <ul className="text-sm text-muted-foreground space-y-1">
+                      {tailorKeyChanges.map((c, i) => (
+                        <li key={i} className="flex gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          {c}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div>
+                  <p className="text-sm font-medium mb-1.5">
+                    {structuredResume ? 'Formatted resume preview (template layout)' : 'Updated resume preview'}
+                  </p>
+                  <div className="rounded-lg border bg-white text-gray-900 shadow-sm p-4 max-h-[520px] overflow-y-auto print:shadow-none">
+                    {structuredResume ? (
+                      <div
+                        ref={resumePreviewRef}
+                        className="resume-template-preview"
+                        style={{ minWidth: '210mm' }}
+                        dangerouslySetInnerHTML={{ __html: populateResumeTemplate(structuredResume) }}
+                      />
+                    ) : (
+                      <pre className="whitespace-pre-wrap text-sm font-sans text-foreground/90">{tailoredCvText}</pre>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    {structuredResume
+                      ? 'Preview uses the fixed HTML resume template. Download to export as PDF (same layout).'
+                      : 'No structured data available; download uses server-generated PDF from your text.'}
+                  </p>
+                </div>
+                <Button
+                  onClick={async () => {
+                    if (!tailoredCvText) return;
+                    setPdfLoading(true);
+                    try {
+                      let blob: Blob;
+                      if (structuredResume && resumePreviewRef.current) {
+                        blob = await htmlElementToPdfBlob(resumePreviewRef.current);
+                      } else {
+                        blob = await exportTailoredResumePdf(tailoredCvText, structuredResume ?? undefined);
+                      }
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `tailored-resume-${tailorJobTitle.replace(/\s+/g, '-')}.pdf`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      toast({ title: 'Download started', description: 'Your resume PDF is downloading.' });
+                    } catch (err: any) {
+                      toast({ title: 'Download failed', description: err?.message || 'Try again.', variant: 'destructive' });
+                    } finally {
+                      setPdfLoading(false);
+                    }
+                  }}
+                  disabled={pdfLoading}
+                  className="gap-2"
+                >
+                  {pdfLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  Download Resume (PDF)
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Matched Jobs Section */}
       {availableJobs.length > 0 && (
@@ -332,6 +480,84 @@ export default function CvReview() {
                     </div>
                   </div>
                 ))}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Download improved CV — single option after review */}
+          {((result.rewrittenBullets?.length ?? 0) > 0 || result.revisedCvText) && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Download className="w-5 h-5 text-primary" />
+                  Download improved CV
+                </CardTitle>
+                <CardDescription>
+                  Get a PDF with the suggested improvements applied (template-based layout).
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button
+                  type="button"
+                  variant="default"
+                  size="lg"
+                  className="gap-2"
+                  disabled={pdfLoading}
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (pdfLoading) return;
+                    setPdfLoading(true);
+                    try {
+                      const bullets = result.rewrittenBullets ?? (result as any).rewritten_bullets ?? [];
+                      let revisedCvText = (result.revisedCvText ?? (result as any).revised_cv_text ?? '')?.trim() || '';
+                      if (!revisedCvText && bullets.length > 0) {
+                        try {
+                          const res = await getRevisedCvText(bullets);
+                          revisedCvText = (res?.revisedCvText ?? (res as any)?.revised_cv_text ?? '')?.trim() || '';
+                        } catch (_) {
+                          /* ignore */
+                        }
+                      }
+                      if (!revisedCvText) {
+                        toast({
+                          title: 'Cannot download',
+                          description: 'Run Analyze CV first, then try again.',
+                          variant: 'destructive',
+                        });
+                        return;
+                      }
+                      const blob = await exportCvReviewPdf(revisedCvText);
+                      const blobUrl = URL.createObjectURL(blob);
+                      const filename = `improved-cv-${new Date().toISOString().slice(0, 10)}.pdf`;
+                      const a = document.createElement('a');
+                      a.href = blobUrl;
+                      a.download = filename;
+                      a.style.display = 'none';
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      setTimeout(() => URL.revokeObjectURL(blobUrl), 200);
+                      toast({ title: 'Download started', description: 'Your improved CV is downloading.' });
+                    } catch (err: any) {
+                      toast({ title: 'Download failed', description: err?.message || 'Could not generate PDF', variant: 'destructive' });
+                    } finally {
+                      setPdfLoading(false);
+                    }
+                  }}
+                >
+                  {pdfLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Generating PDF…
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4" />
+                      Download improved CV (PDF)
+                    </>
+                  )}
+                </Button>
               </CardContent>
             </Card>
           )}

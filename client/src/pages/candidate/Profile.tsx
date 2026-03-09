@@ -8,6 +8,7 @@ import {
   getCandidateProfile,
   updateCandidateProfile,
   uploadCandidatePhoto,
+  deleteCandidatePhoto,
   rerunMatching,
 } from '@/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -32,7 +33,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { User, RefreshCw, Save, Camera, Link as LinkIcon, Globe, Github } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { User, RefreshCw, Save, Camera, Trash2, Link as LinkIcon, Globe, Github } from 'lucide-react';
 
 const profileSchema = z.object({
   name: z.string().min(2, 'Name is required'),
@@ -65,10 +74,11 @@ const countryOptions = [
 
 export default function CandidateProfile() {
   const { toast } = useToast();
-  const { user } = useAuthStore();
+  const { user, refreshUser } = useAuthStore();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [showRemovePhotoAlert, setShowRemovePhotoAlert] = useState(false);
 
   const candidateId = user?.candidateId;
 
@@ -128,6 +138,24 @@ export default function CandidateProfile() {
     },
   });
 
+  const deletePhotoMutation = useMutation({
+    mutationFn: () => deleteCandidatePhoto(),
+    onSuccess: () => {
+      setPhotoPreview(null);
+      setShowRemovePhotoAlert(false);
+      queryClient.setQueryData(['candidate-profile'], (old: any) =>
+        old ? { ...old, photoUrl: null } : old
+      );
+      queryClient.invalidateQueries({ queryKey: ['candidate-profile'] });
+      refreshUser();
+      toast({ title: 'Profile photo removed' });
+    },
+    onError: (error: any) => {
+      setShowRemovePhotoAlert(false);
+      toast({ title: 'Failed to remove photo', description: error.message, variant: 'destructive' });
+    },
+  });
+
   const rerunMutation = useMutation({
     mutationFn: () => (candidateId ? rerunMatching(candidateId) : Promise.reject('No candidate ID')),
     onSuccess: () => {
@@ -138,13 +166,15 @@ export default function CandidateProfile() {
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Preview
       const reader = new FileReader();
       reader.onloadend = () => setPhotoPreview(reader.result as string);
       reader.readAsDataURL(file);
-      // Upload
       photoMutation.mutate(file);
     }
+  };
+
+  const handleConfirmRemovePhoto = () => {
+    deletePhotoMutation.mutate();
   };
 
   const onSubmit = (data: ProfileFormData) => {
@@ -153,9 +183,10 @@ export default function CandidateProfile() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6 max-w-2xl">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-80 w-full" />
+      <div className="space-y-8 max-w-2xl mx-auto px-4 py-6">
+        <Skeleton className="h-10 w-56 rounded-lg" />
+        <Skeleton className="h-40 w-full rounded-xl" />
+        <Skeleton className="h-96 w-full rounded-xl" />
       </div>
     );
   }
@@ -163,29 +194,32 @@ export default function CandidateProfile() {
   const displayPhoto = photoPreview || profile?.photoUrl;
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <h1 className="text-2xl font-bold">My Profile</h1>
-        <p className="text-muted-foreground">Manage your personal information</p>
+    <div className="space-y-8 max-w-2xl mx-auto px-4 py-6">
+      {/* Page header */}
+      <div className="space-y-1 pb-6 border-b border-border/60">
+        <h1 className="text-3xl font-bold tracking-tight">My Profile</h1>
+        <p className="text-muted-foreground text-[15px]">
+          Manage your personal information and how recruiters see you
+        </p>
       </div>
 
-      {/* Photo Upload */}
-      <Card>
-        <CardContent className="p-6">
-          <div className="flex items-center gap-6">
-            <div className="relative group">
-              <Avatar className="w-20 h-20">
-                {displayPhoto && <AvatarImage src={displayPhoto} />}
-                <AvatarFallback className="bg-primary text-primary-foreground text-xl">
-                  {profile?.name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'U'}
+      {/* Profile photo card */}
+      <Card className="overflow-hidden border border-border/50 shadow-sm rounded-xl">
+        <CardContent className="p-6 sm:p-8">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6">
+            <div className="relative group shrink-0">
+              <Avatar className="w-24 h-24 rounded-xl border-2 border-border/50 shadow-md">
+                {displayPhoto && <AvatarImage src={displayPhoto} className="rounded-xl object-cover" />}
+                <AvatarFallback className="rounded-xl bg-primary/10 text-primary text-2xl font-semibold">
+                  {profile?.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U'}
                 </AvatarFallback>
               </Avatar>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"
               >
-                <Camera className="w-6 h-6 text-white" />
+                <Camera className="w-8 h-8 text-white" />
               </button>
               <input
                 ref={fileInputRef}
@@ -195,67 +229,125 @@ export default function CandidateProfile() {
                 onChange={handlePhotoChange}
               />
             </div>
-            <div>
-              <h3 className="font-medium">{profile?.name}</h3>
-              <p className="text-sm text-muted-foreground">{profile?.headline || 'No headline set'}</p>
-              <p className="text-xs text-muted-foreground mt-1">{profile?.email}</p>
+            <div className="flex-1 min-w-0 space-y-3">
+              <div>
+                <h3 className="font-semibold text-lg">{profile?.name}</h3>
+                <p className="text-sm text-muted-foreground">{profile?.headline || 'No headline set'}</p>
+                <p className="text-xs text-muted-foreground/80 mt-0.5">{profile?.email}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={photoMutation.isPending}
+                >
+                  <Camera className="w-4 h-4 mr-2" />
+                  {photoMutation.isPending ? 'Uploading...' : 'Change photo'}
+                </Button>
+                {displayPhoto && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive/50"
+                    disabled={deletePhotoMutation.isPending}
+                    onClick={() => setShowRemovePhotoAlert(true)}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    {deletePhotoMutation.isPending ? 'Removing...' : 'Remove photo'}
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Personal Info */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <User className="w-5 h-5" />
+      <AlertDialog open={showRemovePhotoAlert} onOpenChange={setShowRemovePhotoAlert}>
+        <AlertDialogContent className="rounded-xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove profile photo?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove your profile picture. You can upload a new one anytime.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-lg"
+              onClick={() => setShowRemovePhotoAlert(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              className="rounded-lg"
+              disabled={deletePhotoMutation.isPending}
+              onClick={handleConfirmRemovePhoto}
+            >
+              {deletePhotoMutation.isPending ? 'Removing...' : 'Remove photo'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Personal info card */}
+      <Card className="overflow-hidden border border-border/50 shadow-sm rounded-xl">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-xl flex items-center gap-2">
+            <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10 text-primary">
+              <User className="w-4 h-4" />
+            </span>
             Personal Information
           </CardTitle>
-          <CardDescription>
+          <CardDescription className="text-[15px]">
             Update your profile details. Changes may affect your job matches.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-0">
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
               <FormField
                 control={form.control}
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Full Name</FormLabel>
+                    <FormLabel className="text-[15px]">Full Name</FormLabel>
                     <FormControl>
-                      <Input placeholder="John Doe" {...field} />
+                      <Input placeholder="John Doe" className="rounded-lg h-10" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
-
               <FormField
                 control={form.control}
                 name="headline"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Professional Headline</FormLabel>
+                    <FormLabel className="text-[15px]">Professional Headline</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., Senior Software Engineer" {...field} />
+                      <Input placeholder="e.g., Senior Software Engineer" className="rounded-lg h-10" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
-
               <FormField
                 control={form.control}
                 name="bio"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Bio</FormLabel>
+                    <FormLabel className="text-[15px]">Bio</FormLabel>
                     <FormControl>
                       <Textarea
                         placeholder="Tell us about yourself..."
-                        className="min-h-[100px]"
+                        className="min-h-[100px] rounded-lg resize-none"
                         {...field}
                       />
                     </FormControl>
@@ -263,31 +355,29 @@ export default function CandidateProfile() {
                   </FormItem>
                 )}
               />
-
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <FormField
                   control={form.control}
                   name="phone"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Phone Number</FormLabel>
+                      <FormLabel className="text-[15px]">Phone Number</FormLabel>
                       <FormControl>
-                        <Input type="tel" placeholder="+1 555 123 4567" {...field} />
+                        <Input type="tel" placeholder="+1 555 123 4567" className="rounded-lg h-10" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
-
                 <FormField
                   control={form.control}
                   name="country"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Country</FormLabel>
+                      <FormLabel className="text-[15px]">Country</FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
-                          <SelectTrigger>
+                          <SelectTrigger className="rounded-lg h-10">
                             <SelectValue placeholder="Select country" />
                           </SelectTrigger>
                         </FormControl>
@@ -304,11 +394,9 @@ export default function CandidateProfile() {
                   )}
                 />
               </div>
-
-              {/* Social links */}
-              <div className="space-y-4 pt-2">
-                <h4 className="text-sm font-medium flex items-center gap-2">
-                  <LinkIcon className="w-4 h-4" />
+              <div className="space-y-5 pt-2">
+                <h4 className="text-sm font-medium flex items-center gap-2 text-foreground">
+                  <LinkIcon className="w-4 h-4 text-muted-foreground" />
                   Social Links
                 </h4>
                 <FormField
@@ -316,9 +404,9 @@ export default function CandidateProfile() {
                   name="linkedinUrl"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>LinkedIn</FormLabel>
+                      <FormLabel className="text-[15px]">LinkedIn</FormLabel>
                       <FormControl>
-                        <Input placeholder="https://linkedin.com/in/yourprofile" {...field} />
+                        <Input placeholder="https://linkedin.com/in/yourprofile" className="rounded-lg h-10" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -329,12 +417,12 @@ export default function CandidateProfile() {
                   name="githubUrl"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="flex items-center gap-1.5">
+                      <FormLabel className="text-[15px] flex items-center gap-1.5">
                         <Github className="w-3.5 h-3.5" />
                         GitHub
                       </FormLabel>
                       <FormControl>
-                        <Input placeholder="https://github.com/yourusername" {...field} />
+                        <Input placeholder="https://github.com/yourusername" className="rounded-lg h-10" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -345,24 +433,23 @@ export default function CandidateProfile() {
                   name="portfolioUrl"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="flex items-center gap-1.5">
+                      <FormLabel className="text-[15px] flex items-center gap-1.5">
                         <Globe className="w-3.5 h-3.5" />
                         Portfolio
                       </FormLabel>
                       <FormControl>
-                        <Input placeholder="https://yourportfolio.com" {...field} />
+                        <Input placeholder="https://yourportfolio.com" className="rounded-lg h-10" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
               </div>
-
-              <div className="flex gap-3 pt-4">
+              <div className="pt-4">
                 <Button
                   type="submit"
                   disabled={updateMutation.isPending}
-                  className="gap-2"
+                  className="rounded-lg h-10 px-6 gap-2 font-medium"
                 >
                   <Save className="w-4 h-4" />
                   {updateMutation.isPending ? 'Saving...' : 'Save Changes'}
@@ -373,26 +460,30 @@ export default function CandidateProfile() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <RefreshCw className="w-5 h-5" />
+      {/* Re-run matching card */}
+      <Card className="overflow-hidden border border-border/50 shadow-sm rounded-xl">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-xl flex items-center gap-2">
+            <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10 text-primary">
+              <RefreshCw className="w-4 h-4" />
+            </span>
             Re-run Matching
           </CardTitle>
-          <CardDescription>
-            Update your job recommendations based on your current profile
+          <CardDescription className="text-[15px]">
+            Update your job recommendations based on your current profile and CV
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground mb-4">
-            If you've made significant changes to your profile or uploaded a new CV, you can
-            re-run the matching algorithm to get updated job recommendations.
+        <CardContent className="pt-0">
+          <p className="text-sm text-muted-foreground mb-5">
+            If you've made significant changes to your profile or uploaded a new CV, re-run the
+            matching algorithm to get updated job recommendations.
           </p>
           <Button
             variant="outline"
+            size="default"
+            className="rounded-lg h-10 px-6 gap-2 font-medium"
             onClick={() => rerunMutation.mutate()}
             disabled={rerunMutation.isPending || !candidateId}
-            className="gap-2"
           >
             <RefreshCw className={`w-4 h-4 ${rerunMutation.isPending ? 'animate-spin' : ''}`} />
             {rerunMutation.isPending ? 'Processing...' : 'Re-run Matching'}

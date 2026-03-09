@@ -1,7 +1,12 @@
 import { Sequelize } from 'sequelize';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Custom logger that filters out routine queries
 const customLogger = (msg: string) => {
@@ -36,10 +41,16 @@ const getLogging = () => {
   return process.env.NODE_ENV === 'development' ? customLogger : false;
 };
 
+// Use SQLite when no MySQL is configured (no DATABASE_URL and USE_SQLITE not explicitly false)
+const useSqlite =
+  process.env.USE_SQLITE !== 'false' &&
+  !process.env.DATABASE_URL &&
+  !process.env.DB_HOST;
+
 // Parse DATABASE_URL or use individual env vars
 let sequelize: Sequelize;
 
-// Connection pool configuration
+// Connection pool configuration (MySQL only; SQLite ignores pool)
 const poolConfig = {
   max: parseInt(process.env.DB_POOL_MAX || '10', 10),
   min: parseInt(process.env.DB_POOL_MIN || '2', 10),
@@ -53,6 +64,17 @@ if (process.env.DATABASE_URL) {
     dialect: 'mysql',
     logging: getLogging(),
     pool: poolConfig,
+  });
+} else if (useSqlite) {
+  const dataDir = path.resolve(process.cwd(), 'data');
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+  } catch (_) {}
+  const storage = path.join(dataDir, 'cv_matcher.sqlite');
+  sequelize = new Sequelize({
+    dialect: 'sqlite',
+    storage,
+    logging: getLogging(),
   });
 } else {
   sequelize = new Sequelize(

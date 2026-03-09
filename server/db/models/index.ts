@@ -24,6 +24,7 @@ import { InterviewQuestion } from './InterviewQuestion.js';
 import { InterviewAttempt } from './InterviewAttempt.js';
 import { InterviewAnswer } from './InterviewAnswer.js';
 import { InterviewReport } from './InterviewReport.js';
+import { TailoredResume } from './TailoredResume.js';
 
 // === User associations ===
 User.hasOne(Candidate, { foreignKey: 'user_id', as: 'candidateProfile' });
@@ -116,6 +117,12 @@ SavedJob.belongsTo(Candidate, { foreignKey: 'candidate_id', as: 'candidate' });
 Job.hasMany(SavedJob, { foreignKey: 'job_id', as: 'saves' });
 SavedJob.belongsTo(Job, { foreignKey: 'job_id', as: 'job' });
 
+// === Tailored Resumes (per candidate + job) ===
+Candidate.hasMany(TailoredResume, { foreignKey: 'candidate_id', as: 'tailoredResumes' });
+TailoredResume.belongsTo(Candidate, { foreignKey: 'candidate_id', as: 'candidate' });
+Job.hasMany(TailoredResume, { foreignKey: 'job_id', as: 'tailoredResumes' });
+TailoredResume.belongsTo(Job, { foreignKey: 'job_id', as: 'job' });
+
 // === Company Members (Phase 5) ===
 CompanyProfile.hasMany(CompanyMember, { foreignKey: 'company_id', as: 'members' });
 CompanyMember.belongsTo(CompanyProfile, { foreignKey: 'company_id', as: 'company' });
@@ -183,4 +190,5 @@ export {
   InterviewAttempt,
   InterviewAnswer,
   InterviewReport,
+  TailoredResume,
 };

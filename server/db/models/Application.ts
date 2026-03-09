@@ -11,12 +11,16 @@ export type ApplicationStatus =
   | 'rejected'
   | 'withdrawn';
 
+export type CvType = 'original' | 'tailored';
+
 export interface ApplicationAttributes {
   id: string;
   candidate_id: string;
   job_id: string;
   status: ApplicationStatus;
   cover_letter?: string;
+  cv_type?: CvType;
+  submitted_cv_text?: string;
   match_id?: string;
   notes?: any; // JSON — internal company notes
   pipeline_stage_id?: string;
@@ -30,6 +34,8 @@ export class Application extends BaseModel<ApplicationAttributes> implements App
   declare job_id: string;
   declare status: ApplicationStatus;
   declare cover_letter?: string;
+  declare cv_type?: CvType;
+  declare submitted_cv_text?: string;
   declare match_id?: string;
   declare notes: any;
   declare pipeline_stage_id?: string;
@@ -66,6 +72,15 @@ Application.init(
       defaultValue: 'applied',
     },
     cover_letter: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    cv_type: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+      defaultValue: 'original',
+    },
+    submitted_cv_text: {
       type: DataTypes.TEXT,
       allowNull: true,
     },

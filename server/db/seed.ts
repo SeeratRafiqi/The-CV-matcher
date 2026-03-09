@@ -118,7 +118,32 @@ async function seed() {
           locationType: 'remote' as const,
           country: 'US',
           city: 'San Francisco',
-          description: 'We are seeking an experienced Frontend Engineer to build scalable, user-friendly web applications. You will work with React, TypeScript, and modern frontend tooling to deliver exceptional user experiences.',
+          description: `About the role
+
+We are looking for a Senior Frontend Engineer to own the user-facing side of our product. You will build scalable, accessible web applications and work closely with design and backend teams to ship features that our users love.
+
+Responsibilities:
+
+- Design and implement new features and pages using React, TypeScript, and our design system
+- Improve performance, accessibility, and SEO of our frontend applications
+- Collaborate with product and design to refine requirements and translate mockups into code
+- Mentor junior engineers and participate in code reviews and technical design discussions
+- Own the frontend release pipeline and work with QA to ensure high quality
+
+Requirements:
+
+- 5+ years of experience building production web applications
+- Strong proficiency in JavaScript/TypeScript, React, HTML/CSS, and modern build tools
+- Experience with state management, testing (Jest, React Testing Library), and CI/CD
+- Solid understanding of web performance, accessibility standards, and cross-browser compatibility
+- Clear communication and ability to work in a distributed team
+
+What we offer:
+
+- Remote-first culture with flexible hours
+- Competitive salary and equity
+- Health, dental, and vision insurance
+- Learning budget and conference attendance`,
           mustHaveSkills: ['JavaScript', 'TypeScript', 'React', 'HTML/CSS'],
           niceToHaveSkills: ['Next.js', 'GraphQL', 'Webpack', 'Jest'],
           minYearsExperience: 5,
@@ -141,7 +166,30 @@ async function seed() {
           locationType: 'hybrid' as const,
           country: 'US',
           city: 'New York',
-          description: 'Join our backend team to design and implement robust APIs and microservices. You will work with Node.js, Python, and cloud technologies to build scalable backend systems.',
+          description: `About the role
+
+Join our backend team to design and implement robust APIs and microservices that power our platform. You will work with Node.js, Python, and cloud technologies to build scalable, reliable systems.
+
+Responsibilities:
+
+- Design, develop, and maintain RESTful and GraphQL APIs used by our web and mobile clients
+- Build and operate microservices; participate in on-call rotation and incident response
+- Write clear documentation and runbooks; collaborate with frontend and platform teams
+- Improve database performance, caching, and query patterns
+- Contribute to technical decisions and architecture reviews
+
+Requirements:
+
+- 3+ years of backend development experience
+- Proficiency in Node.js and/or Python; experience with SQL and NoSQL databases
+- Understanding of REST API design, authentication, and security best practices
+- Experience with cloud platforms (AWS, GCP, or Azure) and containerization (Docker)
+- Strong problem-solving skills and attention to detail
+
+Nice to have:
+
+- Experience with message queues, event-driven systems, or stream processing
+- Knowledge of DevOps practices and infrastructure as code`,
           mustHaveSkills: ['Node.js', 'Python', 'REST APIs', 'Database Design'],
           niceToHaveSkills: ['PostgreSQL', 'MongoDB', 'Docker', 'AWS'],
           minYearsExperience: 3,
@@ -164,7 +212,29 @@ async function seed() {
           locationType: 'remote' as const,
           country: 'UK',
           city: 'London',
-          description: 'We need a versatile Full Stack Engineer who can work across the entire stack. You will build features from database to UI, working with modern technologies and best practices.',
+          description: `About the role
+
+We need a versatile Full Stack Engineer who can own features from database to UI. You will work with modern technologies and best practices to ship end-to-end functionality.
+
+Responsibilities:
+
+- Build and ship full-stack features: APIs, business logic, and React-based UIs
+- Participate in planning, estimation, and code reviews; help improve our stack and tooling
+- Debug production issues and improve observability, logging, and testing
+- Work with product and design to clarify requirements and deliver on time
+
+Requirements:
+
+- 4+ years of experience with JavaScript/TypeScript, Node.js, React, and SQL
+- Experience designing APIs and data models; comfortable with both frontend and backend
+- Familiarity with testing, version control, and deployment pipelines
+- Strong communication skills and ability to work in a remote team
+
+What we offer:
+
+- Remote work within the UK; flexible schedule
+- Pension contribution and private health insurance
+- Annual learning budget and team offsites`,
           mustHaveSkills: ['JavaScript', 'Node.js', 'React', 'SQL'],
           niceToHaveSkills: ['TypeScript', 'PostgreSQL', 'GraphQL', 'Docker'],
           minYearsExperience: 4,
@@ -342,6 +412,17 @@ async function seed() {
           ],
         },
       ];
+
+      // Update existing jobs with full descriptions (run first so it works even if create below fails)
+      for (const template of jobTemplates) {
+        const [updated] = await Job.update(
+          { description: template.description },
+          { where: { title: template.title } }
+        );
+        if (updated > 0) {
+          console.log(`✓ Updated description for existing job: ${template.title}`);
+        }
+      }
 
       for (let i = 0; i < SEED_JOBS; i++) {
         const template = jobTemplates[i % jobTemplates.length];

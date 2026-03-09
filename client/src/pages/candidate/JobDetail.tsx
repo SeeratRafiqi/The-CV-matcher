@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, Link } from 'wouter';
 import { useAuthStore } from '@/store/auth';
-import { getJobPublic, applyToJob, getCoverLetterForJob } from '@/api';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { getJobPublic, applyToJob, getCoverLetterForJob, generateCoverLetter, getTailoredResumeForJob } from '@/api';
+import type { CoverLetterTone } from '@/types';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -32,11 +33,129 @@ import {
   Building2,
   Globe,
   Send,
-    CheckCircle2,
-    ExternalLink,
-    FileText,
-    Loader2,
+  CheckCircle2,
+  ExternalLink,
+  FileText,
+  Loader2,
+  Sparkles,
+  Download,
+  FileEdit,
 } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+
+/** Renders job description with clear structure: sections, paragraphs, and lists. */
+function JobDescriptionContent({ description }: { description: string | undefined }) {
+  if (!description || !description.trim()) {
+    return <p className="text-muted-foreground">No description provided.</p>;
+  }
+
+  const blocks = description.split(/\n\s*\n/).filter((b) => b.trim());
+  const elements: React.ReactNode[] = [];
+
+  function renderListItems(rawLines: string[]) {
+    return (
+      <ul className="list-none space-y-2.5 my-4 pl-0">
+        {rawLines.map((line, j) => (
+          <li key={j} className="flex gap-3 text-[15px] leading-relaxed">
+            <span className="text-primary mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
+            <span>{line.replace(/^[\-\*•]\s+/, '').replace(/^\d+[\.\)]\s+/, '').trim()}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  function isSectionHeader(line: string) {
+    return line.length < 80 && (line.endsWith(':') || /^(about|responsibilities|requirements|what you'll|what we|key|qualifications|role|overview|benefits)/i.test(line));
+  }
+
+  function isListItem(line: string) {
+    return /^[\-\*•]\s+/.test(line) || /^\d+[\.\)]\s+/.test(line);
+  }
+
+  blocks.forEach((block, blockIdx) => {
+    const lines = block.split(/\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) return;
+
+    const first = lines[0];
+    const rest = lines.slice(1);
+    const listItems = lines.filter(isListItem);
+
+    if (isSectionHeader(first) && rest.length > 0) {
+      elements.push(
+        <h4 key={`h-${blockIdx}`} className="text-base font-semibold text-foreground mt-6 mb-2 first:mt-0">
+          {first.replace(/:$/, '').trim()}
+        </h4>
+      );
+      if (listItems.length >= 1) {
+        elements.push(
+          <div key={`ul-${blockIdx}`}>
+            {renderListItems(listItems)}
+          </div>
+        );
+      }
+      rest.filter((l) => !isListItem(l)).forEach((line, j) => {
+        if (line) {
+          elements.push(
+            <p key={`p-${blockIdx}-${j}`} className="text-[15px] leading-relaxed text-foreground/90 mb-3">
+              {line}
+            </p>
+          );
+        }
+      });
+      return;
+    }
+
+    if (isSectionHeader(first) && rest.length === 0) {
+      elements.push(
+        <h4 key={`h-${blockIdx}`} className="text-base font-semibold text-foreground mt-6 mb-2 first:mt-0">
+          {first.replace(/:$/, '').trim()}
+        </h4>
+      );
+      return;
+    }
+
+    if (listItems.length >= 2) {
+      elements.push(
+        <div key={`ul-${blockIdx}`}>
+          {renderListItems(listItems)}
+        </div>
+      );
+      rest.filter((l) => !isListItem(l)).forEach((line, j) => {
+        if (line) {
+          elements.push(
+            <p key={`p-${blockIdx}-${j}`} className="text-[15px] leading-relaxed text-foreground/90 mb-3">
+              {line}
+            </p>
+          );
+        }
+      });
+      return;
+    }
+
+    lines.forEach((line, j) => {
+      elements.push(
+        <p key={`p-${blockIdx}-${j}`} className="text-[15px] leading-relaxed text-foreground/90 mb-3 last:mb-0">
+          {line}
+        </p>
+      );
+    });
+  });
+
+  return (
+    <div className="job-description max-w-none">
+      {elements.length > 0 ? elements : (
+        <p className="text-[15px] leading-relaxed text-foreground/90 whitespace-pre-wrap">{description}</p>
+      )}
+    </div>
+  );
+}
 
 export default function CandidateJobDetail() {
   const [, params] = useRoute('/candidate/jobs/:id');
@@ -46,7 +165,10 @@ export default function CandidateJobDetail() {
   const queryClient = useQueryClient();
   const [showApplyDialog, setShowApplyDialog] = useState(false);
   const [coverLetter, setCoverLetter] = useState('');
-  const [coverLetterSource, setCoverLetterSource] = useState<'saved' | 'manual' | ''>('');
+  const [coverLetterSource, setCoverLetterSource] = useState<'saved' | 'manual' | 'generated' | ''>('');
+  const [coverLetterTone, setCoverLetterTone] = useState<CoverLetterTone>('formal');
+  const [applyCvChoice, setApplyCvChoice] = useState<'original' | 'tailored'>('original');
+  const [savedTailoredForJob, setSavedTailoredForJob] = useState<{ tailoredCvText: string } | null>(null);
 
   const { data: job, isLoading: jobLoading } = useQuery({
     queryKey: ['job-public', jobId],
@@ -69,19 +191,50 @@ export default function CandidateJobDetail() {
     }
   }, [showApplyDialog, savedCoverLetter, coverLetterSource]);
 
+  useEffect(() => {
+    if (showApplyDialog && jobId) {
+      getTailoredResumeForJob(jobId).then((data) => setSavedTailoredForJob(data ?? null));
+    } else {
+      setSavedTailoredForJob(null);
+    }
+  }, [showApplyDialog, jobId]);
+
   const applyMutation = useMutation({
-    mutationFn: () => applyToJob(jobId, coverLetter || undefined),
+    mutationFn: () =>
+      applyToJob(jobId, coverLetter || undefined, {
+        cvType: applyCvChoice,
+        tailoredCvText: applyCvChoice === 'tailored' && savedTailoredForJob?.tailoredCvText ? savedTailoredForJob.tailoredCvText : undefined,
+      }),
     onSuccess: () => {
       toast({ title: 'Application Submitted!', description: 'Your application has been sent successfully.' });
       setShowApplyDialog(false);
       setCoverLetter('');
       setCoverLetterSource('');
+      setApplyCvChoice('original');
+      setSavedTailoredForJob(null);
       queryClient.invalidateQueries({ queryKey: ['job-public', jobId] });
       queryClient.invalidateQueries({ queryKey: ['my-applications'] });
       queryClient.invalidateQueries({ queryKey: ['browse-jobs'] });
     },
     onError: (error: any) => {
       toast({ title: 'Application Failed', description: error.message || 'Something went wrong', variant: 'destructive' });
+    },
+  });
+
+  const generateCoverLetterMutation = useMutation({
+    mutationFn: () => generateCoverLetter(jobId, coverLetterTone),
+    onSuccess: (data) => {
+      setCoverLetter(data.coverLetter);
+      setCoverLetterSource('generated');
+      queryClient.invalidateQueries({ queryKey: ['cover-letter', jobId] });
+      const isFallback = data.coverLetter?.startsWith('AI cover letter is not available');
+      toast({
+        title: isFallback ? 'AI not configured' : 'Cover letter generated',
+        description: isFallback ? 'Add ALIBABA_LLM_API_KEY to .env and restart to enable AI. You can write your letter below.' : 'You can edit it below before applying.',
+      });
+    },
+    onError: (err: any) => {
+      toast({ title: 'Generation failed', description: err.message || 'Try again or write your cover letter manually.', variant: 'destructive' });
     },
   });
 
@@ -133,7 +286,8 @@ export default function CandidateJobDetail() {
     );
   }
 
-  const canApply = user?.role === 'candidate' && !applicationStatus;
+  const isClosed = !!(job.deadline && new Date(job.deadline) < new Date());
+  const canApply = user?.role === 'candidate' && !applicationStatus && !isClosed;
   const hasApplied = !!applicationStatus && applicationStatus !== 'withdrawn';
 
   return (
@@ -146,7 +300,14 @@ export default function CandidateJobDetail() {
           </Button>
         </Link>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold">{job.title}</h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl font-bold">{job.title}</h1>
+            {isClosed && (
+              <Badge variant="destructive" className="font-medium">
+                Closed
+              </Badge>
+            )}
+          </div>
           <div className="flex items-center gap-2 mt-1">
             {job.companyProfile?.logoUrl ? (
               <img src={job.companyProfile.logoUrl} alt="" className="w-5 h-5 rounded-sm object-cover" />
@@ -195,10 +356,25 @@ export default function CandidateJobDetail() {
         </Card>
       )}
 
+      {/* Applications closed banner */}
+      {isClosed && !hasApplied && (
+        <Card className="bg-destructive/10 border-destructive/30">
+          <CardContent className="p-4 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-destructive shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-destructive">Applications closed</p>
+              <p className="text-xs text-muted-foreground">
+                The deadline for this position has passed. You can still view the job details but cannot submit an application.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Job Details */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Job Details</CardTitle>
+          <CardTitle className="text-xl">Job Details</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -224,7 +400,7 @@ export default function CandidateJobDetail() {
             </div>
           </div>
           {job.deadline && (
-            <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
+            <div className={`flex items-center gap-2 text-sm ${isClosed ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'}`}>
               <Clock className="w-4 h-4" />
               <span>Deadline: {formatDate(job.deadline)} ({getDaysRemaining(job.deadline)})</span>
             </div>
@@ -281,23 +457,27 @@ export default function CandidateJobDetail() {
       {/* Description */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Description</CardTitle>
+          <CardTitle className="text-xl">Job Description</CardTitle>
+          <p className="text-sm text-muted-foreground mt-1">
+            What you&apos;ll do and what we&apos;re looking for
+          </p>
         </CardHeader>
-        <CardContent>
-          <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
-            {job.description}
-          </div>
+        <CardContent className="pt-2 pb-6">
+          <JobDescriptionContent description={job.description} />
         </CardContent>
       </Card>
 
       {/* Requirements */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Requirements</CardTitle>
+          <CardTitle className="text-xl">Requirements</CardTitle>
+          <p className="text-sm text-muted-foreground mt-1">
+            Must-have and nice-to-have skills
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+            <h4 className="text-base font-medium mb-2 flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-emerald-600" />
               Must-Have Skills
             </h4>
@@ -309,7 +489,7 @@ export default function CandidateJobDetail() {
           </div>
           {job.niceToHaveSkills && job.niceToHaveSkills.length > 0 && (
             <div>
-              <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+              <h4 className="text-base font-medium mb-2 flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 text-amber-600" />
                 Nice-to-Have Skills
               </h4>
@@ -354,7 +534,7 @@ export default function CandidateJobDetail() {
             Apply Now
           </Button>
         )}
-        {applicationStatus === 'withdrawn' && (
+        {applicationStatus === 'withdrawn' && !isClosed && (
           <Button
             size="lg"
             onClick={() => setShowApplyDialog(true)}
@@ -364,6 +544,12 @@ export default function CandidateJobDetail() {
             Re-Apply
           </Button>
         )}
+        <Link href={`/candidate/cv-review?jobId=${jobId}`}>
+          <Button size="lg" variant="outline" className="gap-2">
+            <FileEdit className="w-4 h-4" />
+            Tailor My Resume
+          </Button>
+        </Link>
         <Link href="/candidate/jobs">
           <Button size="lg" variant="outline">Back to Jobs</Button>
         </Link>
@@ -385,17 +571,75 @@ export default function CandidateJobDetail() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">CV to attach</label>
+              <div className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="applyCvChoice"
+                    checked={applyCvChoice === 'original'}
+                    onChange={() => setApplyCvChoice('original')}
+                    className="rounded-full"
+                  />
+                  <span className="text-sm">My original CV</span>
+                </label>
+                {savedTailoredForJob ? (
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="applyCvChoice"
+                      checked={applyCvChoice === 'tailored'}
+                      onChange={() => setApplyCvChoice('tailored')}
+                      className="rounded-full"
+                    />
+                    <span className="text-sm">Tailored CV for this job (saved)</span>
+                  </label>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Use &quot;Tailor My Resume&quot; first to generate and save a tailored CV, then you can select it here.
+                  </p>
+                )}
+              </div>
+            </div>
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-sm font-medium">
                   Cover Letter <span className="text-muted-foreground">(optional)</span>
                 </label>
-                {!savedCLLoading && !savedCoverLetter?.content && (
-                  <Link href="/candidate/cover-letter" className="text-xs text-primary hover:underline flex items-center gap-1">
-                    <FileText className="w-3 h-3" />
-                    Generate with AI
-                  </Link>
-                )}
+              </div>
+              {/* Generate with AI: tone + button — no need to leave the dialog */}
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <Select value={coverLetterTone} onValueChange={(v) => setCoverLetterTone(v as CoverLetterTone)}>
+                  <SelectTrigger className="w-[140px] h-9">
+                    <SelectValue placeholder="Tone" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="formal">Formal</SelectItem>
+                    <SelectItem value="conversational">Conversational</SelectItem>
+                    <SelectItem value="enthusiastic">Enthusiastic</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="gap-1.5 h-9"
+                  onClick={() => generateCoverLetterMutation.mutate()}
+                  disabled={generateCoverLetterMutation.isPending}
+                >
+                  {generateCoverLetterMutation.isPending ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Generating…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Generate with AI
+                    </>
+                  )}
+                </Button>
               </div>
               {savedCLLoading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground p-3">
@@ -415,7 +659,7 @@ export default function CandidateJobDetail() {
                     rows={6}
                   />
                   <p className="text-xs text-muted-foreground">
-                    You can edit the letter above before submitting. Changes won't update the saved version.
+                    You can edit above or generate a new one with AI. Changes won&apos;t update the saved version.
                   </p>
                 </div>
               ) : (
@@ -425,7 +669,7 @@ export default function CandidateJobDetail() {
                     setCoverLetter(e.target.value);
                     setCoverLetterSource('manual');
                   }}
-                  placeholder="Why are you interested in this role? What makes you a great fit?"
+                  placeholder="Why are you interested in this role? What makes you a great fit? Or use Generate with AI above."
                   rows={6}
                 />
               )}
@@ -445,7 +689,10 @@ export default function CandidateJobDetail() {
             </Button>
             <Button
               onClick={() => applyMutation.mutate()}
-              disabled={applyMutation.isPending}
+              disabled={
+                applyMutation.isPending ||
+                (applyCvChoice === 'tailored' && !savedTailoredForJob?.tailoredCvText)
+              }
               className="gap-2"
             >
               {applyMutation.isPending ? 'Submitting...' : 'Submit Application'}

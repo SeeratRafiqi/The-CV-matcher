@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
-import { createCompanyJob } from '@/api';
+import { createCompanyJob, generateJobDescription } from '@/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { ArrowLeft, Plus, X, Send } from 'lucide-react';
+import { ArrowLeft, Plus, X, Send, Sparkles, Loader2 } from 'lucide-react';
 import { Link } from 'wouter';
 
 const locationTypes = [
@@ -72,6 +72,31 @@ export default function PostJob() {
     },
     onError: (error: any) => {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const generateDescMutation = useMutation({
+    mutationFn: () =>
+      generateJobDescription({
+        title: form.title || 'Software role',
+        skills: [...mustHaveSkills, ...niceToHaveSkills].length > 0 ? [...mustHaveSkills, ...niceToHaveSkills] : undefined,
+        seniorityLevel: form.seniorityLevel,
+        locationType: form.locationType,
+        industry: form.department || undefined,
+      }),
+    onSuccess: (data) => {
+      setForm((prev) => ({
+        ...prev,
+        description: data.description,
+        seniorityLevel: data.suggestedSeniority || prev.seniorityLevel,
+        minYearsExperience: data.suggestedMinYears ?? prev.minYearsExperience,
+      }));
+      setMustHaveSkills(data.mustHaveSkills || []);
+      setNiceToHaveSkills(data.niceToHaveSkills || []);
+      toast({ title: 'Description generated', description: 'You can edit it below before publishing.' });
+    },
+    onError: (err: any) => {
+      toast({ title: 'Generation failed', description: err?.message, variant: 'destructive' });
     },
   });
 
@@ -204,13 +229,33 @@ export default function PostJob() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Description *</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle>Description *</CardTitle>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => generateDescMutation.mutate()}
+              disabled={generateDescMutation.isPending}
+              className="gap-2"
+            >
+              {generateDescMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Sparkles className="w-4 h-4" />
+              )}
+              Generate with AI
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Fill in job title (and optionally department, skills) above, then use Generate with AI to create a description. You can edit it below.
+          </p>
         </CardHeader>
         <CardContent>
           <Textarea
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
-            placeholder="Describe the role, responsibilities, what you're looking for..."
+            placeholder="Describe the role, responsibilities, what you're looking for... or click Generate with AI above."
             rows={8}
           />
         </CardContent>

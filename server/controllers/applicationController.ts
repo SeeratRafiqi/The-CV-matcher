@@ -84,8 +84,15 @@ export class ApplicationController extends BaseController {
         try {
           submittedCvText = await getCvTextForCandidate(candidate.id);
         } catch {
-          submittedCvText = '';
+          const err: any = new Error('Please upload a CV from your Dashboard or Profile before applying.');
+          err.status = 400;
+          throw err;
         }
+      }
+      if (!submittedCvText || !submittedCvText.trim()) {
+        const err: any = new Error('Please upload a CV before applying.');
+        err.status = 400;
+        throw err;
       }
 
       // Check if already applied
@@ -750,3 +757,4 @@ export class ApplicationController extends BaseController {
 }
 
 export const applicationController = new ApplicationController();
+

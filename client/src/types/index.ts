@@ -662,6 +662,8 @@ export interface StructuredResume {
   experience: { role: string; company: string; dates?: string; bullets: string[] }[];
   education: { degree: string; institution: string; dates?: string }[];
   projects: { name: string; description?: string; bullets?: string[] }[];
+  /** Awards, honours, achievements (e.g. "Employee of the Month", "Dean's List"). */
+  achievements?: string[];
   certifications: string[];
 }
 

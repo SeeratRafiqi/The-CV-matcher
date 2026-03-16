@@ -42,10 +42,8 @@ import {
   Shield,
   Users,
   FileSearch,
-  PenTool,
   Target,
   MessageCircleQuestion,
-  Wand2,
   Timer,
 } from 'lucide-react';
 
@@ -73,7 +71,6 @@ const candidateMenuItems = [
   { title: 'Messages', url: '/messages', icon: MessageSquare },
   { title: 'Notifications', url: '/notifications', icon: Bell },
   { title: 'AI CV Review', url: '/candidate/cv-review', icon: FileSearch },
-  { title: 'Cover Letter', url: '/candidate/cover-letter', icon: PenTool },
   { title: 'Skill Gap', url: '/candidate/skill-gap', icon: Target },
   { title: 'My Profile', url: '/candidate/profile', icon: User },
   { title: 'Privacy', url: '/candidate/privacy', icon: Shield },
@@ -84,7 +81,6 @@ const companyMenuItems = [
   { title: 'Company Profile', url: '/company/profile', icon: Building2 },
   { title: 'Jobs', url: '/company/jobs', icon: Briefcase },
   { title: 'Candidates', url: '/company/candidates', icon: Users },
-  { title: 'AI Job Generator', url: '/company/job-generator', icon: Wand2 },
   { title: 'Interview Prep', url: '/company/interview-prep', icon: MessageCircleQuestion },
   { title: 'Analytics', url: '/company/analytics', icon: BarChart3 },
   { title: 'Messages', url: '/messages', icon: MessageSquare },
@@ -182,6 +178,12 @@ export function AppLayout({ children }: AppLayoutProps) {
     '--sidebar-width': '16rem',
     '--sidebar-width-icon': '3rem',
   } as React.CSSProperties;
+
+  const isVoiceInterviewPage =
+    location.startsWith('/candidate/voice-interviews') || location === '/candidate/test-voice-interview';
+  if (isVoiceInterviewPage) {
+    return <div className="h-screen w-full overflow-hidden">{children}</div>;
+  }
 
   return (
     <SidebarProvider style={sidebarStyle}>

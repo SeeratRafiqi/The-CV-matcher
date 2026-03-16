@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { reviewCv, getRevisedCvText, getRecommendedJobs, getCandidateProfile, getJobPublic, tailorResumeForJob, exportTailoredResumePdf, exportCvReviewPdf } from '@/api';
+import { reviewCv, getRecommendedJobs, getCandidateProfile, getJobPublic, tailorResumeForJob, exportTailoredResumePdf } from '@/api';
 import { htmlElementToPdfBlob } from '@/lib/pdfExport';
 import { populateResumeTemplate } from '@/lib/resumeTemplate';
 import { useAuthStore } from '@/store/auth';
@@ -25,7 +25,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Lightbulb,
-  ArrowRight,
   Loader2,
   Briefcase,
   MapPin,
@@ -214,7 +213,14 @@ export default function CvReview() {
                         ref={resumePreviewRef}
                         className="resume-template-preview"
                         style={{ minWidth: '210mm' }}
-                        dangerouslySetInnerHTML={{ __html: populateResumeTemplate(structuredResume) }}
+                        dangerouslySetInnerHTML={{
+                          __html: populateResumeTemplate(structuredResume, {
+                            highlightTerms: [
+                              ...(jobForTailor?.mustHaveSkills ?? []),
+                              ...(jobForTailor?.niceToHaveSkills ?? []),
+                            ],
+                          }),
+                        }}
                       />
                     ) : (
                       <pre className="whitespace-pre-wrap text-sm font-sans text-foreground/90">{tailoredCvText}</pre>
@@ -449,126 +455,13 @@ export default function CvReview() {
             ))}
           </div>
 
-          {/* Rewritten Bullets */}
-          {result.rewrittenBullets.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Improved Bullet Points</CardTitle>
-                <CardDescription>
-                  Here are AI-suggested rewrites for weak bullet points in your CV.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {result.rewrittenBullets.map((bullet, idx) => (
-                  <div key={idx} className="rounded-lg border p-3 space-y-2">
-                    <div className="flex items-start gap-2">
-                      <Badge variant="outline" className="text-red-600 border-red-200 mt-0.5 flex-shrink-0">
-                        Before
-                      </Badge>
-                      <p className="text-sm line-through text-muted-foreground">
-                        {bullet.original}
-                      </p>
-                    </div>
-                    <div className="flex items-center justify-center">
-                      <ArrowRight className="w-4 h-4 text-primary" />
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <Badge className="bg-green-100 text-green-700 border-green-200 mt-0.5 flex-shrink-0">
-                        After
-                      </Badge>
-                      <p className="text-sm font-medium">{bullet.improved}</p>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Download improved CV — single option after review */}
-          {((result.rewrittenBullets?.length ?? 0) > 0 || result.revisedCvText) && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Download className="w-5 h-5 text-primary" />
-                  Download improved CV
-                </CardTitle>
-                <CardDescription>
-                  Get a PDF with the suggested improvements applied (template-based layout).
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Button
-                  type="button"
-                  variant="default"
-                  size="lg"
-                  className="gap-2"
-                  disabled={pdfLoading}
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (pdfLoading) return;
-                    setPdfLoading(true);
-                    try {
-                      const bullets = result.rewrittenBullets ?? (result as any).rewritten_bullets ?? [];
-                      let revisedCvText = (result.revisedCvText ?? (result as any).revised_cv_text ?? '')?.trim() || '';
-                      if (!revisedCvText && bullets.length > 0) {
-                        try {
-                          const res = await getRevisedCvText(bullets);
-                          revisedCvText = (res?.revisedCvText ?? (res as any)?.revised_cv_text ?? '')?.trim() || '';
-                        } catch (_) {
-                          /* ignore */
-                        }
-                      }
-                      if (!revisedCvText) {
-                        toast({
-                          title: 'Cannot download',
-                          description: 'Run Analyze CV first, then try again.',
-                          variant: 'destructive',
-                        });
-                        return;
-                      }
-                      const blob = await exportCvReviewPdf(revisedCvText);
-                      const blobUrl = URL.createObjectURL(blob);
-                      const filename = `improved-cv-${new Date().toISOString().slice(0, 10)}.pdf`;
-                      const a = document.createElement('a');
-                      a.href = blobUrl;
-                      a.download = filename;
-                      a.style.display = 'none';
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      setTimeout(() => URL.revokeObjectURL(blobUrl), 200);
-                      toast({ title: 'Download started', description: 'Your improved CV is downloading.' });
-                    } catch (err: any) {
-                      toast({ title: 'Download failed', description: err?.message || 'Could not generate PDF', variant: 'destructive' });
-                    } finally {
-                      setPdfLoading(false);
-                    }
-                  }}
-                >
-                  {pdfLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Generating PDF…
-                    </>
-                  ) : (
-                    <>
-                      <Download className="w-4 h-4" />
-                      Download improved CV (PDF)
-                    </>
-                  )}
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-
           {/* Next Steps */}
           {availableJobs.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Next Steps</CardTitle>
                 <CardDescription>
-                  Based on your review, consider tailoring your CV or generating a cover letter for these jobs.
+                  Based on your review, consider tailoring your CV for these jobs.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -586,11 +479,6 @@ export default function CvReview() {
                         </p>
                       </div>
                       <div className="flex gap-1.5">
-                        <Link href={`/candidate/cover-letter`}>
-                          <Button variant="outline" size="sm" className="text-xs h-7">
-                            Cover Letter
-                          </Button>
-                        </Link>
                         <Link href={`/candidate/jobs/${j.id}`}>
                           <Button variant="outline" size="sm" className="text-xs h-7">
                             View

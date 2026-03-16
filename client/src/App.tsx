@@ -54,7 +54,6 @@ import CandidatePrivacySettings from "@/pages/candidate/PrivacySettings";
 
 // Candidate pages (Phase 6 — AI)
 import CvReview from "@/pages/candidate/CvReview";
-import CoverLetterGenerator from "@/pages/candidate/CoverLetterGenerator";
 import SkillGapAnalysis from "@/pages/candidate/SkillGapAnalysis";
 
 // Company pages (Phase 4)
@@ -65,7 +64,6 @@ import CompanyPostJobFromUrl from "@/pages/company/PostJobFromUrl";
 
 // Company pages (Phase 6 — AI)
 import InterviewPrep from "@/pages/company/InterviewPrep";
-import JobDescriptionGenerator from "@/pages/company/JobDescriptionGenerator";
 
 // Admin pages (Phase 4)
 import AdminAnalytics from "@/pages/admin/Analytics";
@@ -345,13 +343,6 @@ function Router() {
           </CandidateRoute>
         </ProtectedRoute>
       </Route>
-      <Route path="/candidate/cover-letter">
-        <ProtectedRoute>
-          <CandidateRoute>
-            <CoverLetterGenerator />
-          </CandidateRoute>
-        </ProtectedRoute>
-      </Route>
       <Route path="/candidate/skill-gap">
         <ProtectedRoute>
           <CandidateRoute>
@@ -445,14 +436,6 @@ function Router() {
           </CompanyRoute>
         </ProtectedRoute>
       </Route>
-      <Route path="/company/job-generator">
-        <ProtectedRoute>
-          <CompanyRoute>
-            <JobDescriptionGenerator />
-          </CompanyRoute>
-        </ProtectedRoute>
-      </Route>
-
       {/* Notifications (all roles) */}
       <Route path="/notifications">
         <ProtectedRoute>

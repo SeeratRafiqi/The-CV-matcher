@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, Link } from 'wouter';
 import { useAuthStore } from '@/store/auth';
-import { getJobPublic, applyToJob, getCoverLetterForJob, generateCoverLetter, getTailoredResumeForJob } from '@/api';
+import { getJobPublic, applyToJob, getCoverLetterForJob, generateCoverLetter, getTailoredResumeForJob, getCandidateProfile } from '@/api';
 import type { CoverLetterTone } from '@/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -174,6 +174,12 @@ export default function CandidateJobDetail() {
     queryKey: ['job-public', jobId],
     queryFn: () => getJobPublic(jobId),
     enabled: !!jobId,
+  });
+
+  const { data: candidateProfile } = useQuery({
+    queryKey: ['candidate-profile'],
+    queryFn: getCandidateProfile,
+    enabled: !!user?.id && user?.role === 'candidate',
   });
 
   // Fetch saved cover letter for this job
@@ -527,7 +533,17 @@ export default function CandidateJobDetail() {
         {canApply && (
           <Button
             size="lg"
-            onClick={() => setShowApplyDialog(true)}
+            onClick={() => {
+              if (!candidateProfile?.cvFile) {
+                toast({
+                  title: 'CV required',
+                  description: 'Please upload a CV from your Dashboard or Profile before applying.',
+                  variant: 'destructive',
+                });
+                return;
+              }
+              setShowApplyDialog(true);
+            }}
             className="flex-1 gap-2"
           >
             <Send className="w-4 h-4" />
@@ -537,7 +553,17 @@ export default function CandidateJobDetail() {
         {applicationStatus === 'withdrawn' && !isClosed && (
           <Button
             size="lg"
-            onClick={() => setShowApplyDialog(true)}
+            onClick={() => {
+              if (!candidateProfile?.cvFile) {
+                toast({
+                  title: 'CV required',
+                  description: 'Please upload a CV from your Dashboard or Profile before applying.',
+                  variant: 'destructive',
+                });
+                return;
+              }
+              setShowApplyDialog(true);
+            }}
             className="flex-1 gap-2"
           >
             <Send className="w-4 h-4" />

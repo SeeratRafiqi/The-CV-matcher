@@ -1166,9 +1166,9 @@ Return ONLY valid JSON.`;
     jobDescription: string,
     jobSkills: string[]
   ): Promise<{ tailoredCvText: string; keyChanges: string[] }> {
-    const prompt = `You are a career advisor. Customize the candidate's CV for this specific job.
+    const prompt = `You are a career advisor. Customize the candidate's CV for this specific job. You must preserve the candidate's real content exactly—no mixing, no fabrication.
 
-=== CANDIDATE'S ORIGINAL CV ===
+=== CANDIDATE'S ORIGINAL CV (use only this text) ===
 ${cvText.substring(0, 12000)}
 
 === TARGET JOB ===
@@ -1176,17 +1176,18 @@ Title: ${jobTitle}
 Description: ${jobDescription.substring(0, 3000)}
 Key skills: ${jobSkills.join(', ')}
 
-Your task: Produce a tailored CV that keeps the SAME TEMPLATE as the original (same section titles, same order of sections, same formatting and style) but:
-1. REORDER within each section so job-relevant content comes first (e.g. if the job is Java developer, put Java at the top of Skills, Java-related projects first in Projects/Experience).
-2. REMOVE content that is not relevant to this job (e.g. unrelated roles like "food critic", irrelevant hobbies, skills that don't match the job). Omit entire bullets or entries that don't help for this role. Do not keep filler just to fill space.
-3. Keep the exact same structure: same section headers, same bullet style, same line breaks. Only the content inside each section is reordered or trimmed (irrelevant items removed).
-4. DO NOT add or invent anything. Only use content that appears in the original CV. Only reorder and remove—never add new facts, skills, or jobs.
+Rules (strict):
+1. COPY text verbatim from the candidate's CV above. Do not rephrase, paraphrase, or "improve" wording. Do not add numbers, percentages, dates, or achievements that are not explicitly in the CV. Do not mix in content from any other source.
+2. REORDER within each section so job-relevant content comes first (e.g. put matching skills first, relevant roles/projects first). Keep every word of each item you keep—only change order.
+3. REMOVE entire bullets or entries that are not relevant to this job (e.g. unrelated roles, irrelevant hobbies). Omit them; do not replace with new text.
+4. Keep the same structure: same section headers, same bullet style. Only reorder and delete—never add or invent.
+5. If you are unsure whether something is in the CV, do not include it. Every skill, job, project, and date must appear exactly as in the candidate's CV.
 
-Output the full tailored CV as one string. Use \\n for newlines in tailoredCvText. In keyChanges, list briefly what you did (e.g. "Moved Java and Spring to top of Skills", "Removed unrelated food critic role", "Put Java project first in Projects").
+Output the full tailored CV as one string. Use \\n for newlines in tailoredCvText. In keyChanges, list briefly what you did (e.g. "Moved Java and Spring to top of Skills", "Removed unrelated role", "Put Java project first").
 
 Return ONLY valid JSON:
 {
-  "tailoredCvText": "<full tailored CV string, same template as original, \\n for newlines>",
+  "tailoredCvText": "<full tailored CV string, verbatim content from CV above, only reordered/trimmed, \\n for newlines>",
   "keyChanges": ["What you reordered", "What you removed", "etc."]
 }`;
 
@@ -1209,9 +1210,12 @@ Return ONLY valid JSON:
     experience: { role: string; company: string; dates?: string; bullets: string[] }[];
     education: { degree: string; institution: string; dates?: string }[];
     projects: { name: string; description?: string; bullets?: string[] }[];
+    achievements: string[];
     certifications: string[];
   }> {
-    const prompt = `You are a resume parser. Extract the following resume content into a structured JSON. Use ONLY information that appears in the text. Do not invent anything.
+    const prompt = `You are a resume parser. Extract the following resume content into a structured JSON.
+
+Rules: Use ONLY information that appears in the text below. Copy exact wording from the text. Do not invent, infer, or add any information. Do not add skills, jobs, dates, or achievements that are not explicitly written in the resume. If something is not in the text, use empty string or empty array. Do not mix content from different sections or fabricate details.
 
 === RESUME TEXT ===
 ${cvText.substring(0, 10000)}
@@ -1234,11 +1238,18 @@ Return ONLY valid JSON with this exact structure (use empty strings or empty arr
   "projects": [
     { "name": "Project name", "description": "optional short description", "bullets": ["optional bullet"] }
   ],
+  "achievements": ["award or achievement 1", "award or achievement 2"],
   "certifications": ["cert1", "cert2"]
-}`;
+}
+
+Extract "achievements" from sections like Awards, Achievements, Honours, Rewards, or any listed accolades (e.g. Dean's List, Employee of the Month, scholarships). Use empty array [] if none found.`;
 
     const response = await this.callQwen(prompt, true);
-    return JSON.parse(response);
+    const parsed = JSON.parse(response);
+    return {
+      ...parsed,
+      achievements: Array.isArray(parsed.achievements) ? parsed.achievements : [],
+    };
   }
 
   /**
@@ -1868,9 +1879,15 @@ Return ONLY valid JSON: { "outcome": "Your full report text here, with SUMMARY f
 Job title: ${jobTitle}
 Job description (excerpt): ${(jobDescription || '').substring(0, 1500)}
 Key skills: ${(jobSkills || []).join(', ')}
-Candidate resume (excerpt): ${(candidateContext || 'Not provided').substring(0, 800)}
+Candidate resume (excerpt): ${(candidateContext || 'Not provided').substring(0, 1500)}
 
-Generate exactly ${count} interview questions for this role. Mix of behavioral and role-specific/technical. One question per line. No numbering. No preamble — output only the questions, one per line.`;
+Generate exactly ${count} interview questions. Include a balanced mix of these four types (vary the order):
+1) **Resume-based**: Questions about the candidate's experience, projects, or skills from their CV (e.g. "Tell me about [specific project/role] on your resume", "You mentioned X — how did you apply it?").
+2) **Job/role-based**: Questions about this role and why they want it (e.g. "Why are you interested in this position?", "How do you see yourself fitting into this team?").
+3) **Technical**: Role-relevant technical questions (concepts, tools, or scenarios for ${jobTitle}).
+4) **Behavioral**: Situational or past-behavior questions (e.g. "Tell me about a time when...", "How do you handle...?").
+
+One question per line. No numbering. No preamble — output only the questions, one per line.`;
 
     const response = await this.callQwen(prompt, false);
     const lines = (response || '')

@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'wouter';
 import { useAuthStore } from '@/store/auth';
-import { browseJobs, getSavedJobs, saveJob, unsaveJob, applyToJob, generateCoverLetter, getTailoredResumeForJob } from '@/api';
+import { browseJobs, getSavedJobs, saveJob, unsaveJob, applyToJob, generateCoverLetter, getTailoredResumeForJob, getCandidateProfile } from '@/api';
 import type { CoverLetterTone } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -110,6 +110,12 @@ export default function CandidateJobList() {
   const { data: savedJobsList = [] } = useQuery({
     queryKey: ['saved-jobs'],
     queryFn: getSavedJobs,
+  });
+
+  const { data: candidateProfile } = useQuery({
+    queryKey: ['candidate-profile'],
+    queryFn: getCandidateProfile,
+    enabled: !!user?.id && user?.role === 'candidate',
   });
 
   const savedJobIds = useMemo(
@@ -372,7 +378,21 @@ export default function CandidateJobList() {
               Deselect all
             </Button>
             {selectedCount > 0 && (
-              <Button size="sm" onClick={() => setBulkApplyOpen(true)} className="gap-1.5">
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (!candidateProfile?.cvFile) {
+                    toast({
+                      title: 'CV required',
+                      description: 'Please upload a CV from your Dashboard or Profile before applying.',
+                      variant: 'destructive',
+                    });
+                    return;
+                  }
+                  setBulkApplyOpen(true);
+                }}
+                className="gap-1.5"
+              >
                 <Send className="w-3.5 h-3.5" />
                 Apply to selected ({selectedCount})
               </Button>
@@ -537,6 +557,14 @@ export default function CandidateJobList() {
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
+                          if (!candidateProfile?.cvFile) {
+                            toast({
+                              title: 'CV required',
+                              description: 'Please upload a CV from your Dashboard or Profile before applying.',
+                              variant: 'destructive',
+                            });
+                            return;
+                          }
                           setSingleApplyJobId(job.id);
                           setSingleApplyOpen(true);
                         }}

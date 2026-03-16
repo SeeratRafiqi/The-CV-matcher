@@ -305,35 +305,16 @@ export class AiController {
       const cvText = await getCvTextForCandidate(candidate.id);
       const skills = [...(job.must_have_skills || []), ...(job.nice_to_have_skills || [])];
 
-      let textToTailor = cvText;
-      const appliedSuggestions: string[] = [];
-
-      try {
-        const reviewResult = await qwenService.reviewCV(cvText, job.title);
-        const bullets = Array.isArray(reviewResult.rewrittenBullets)
-          ? reviewResult.rewrittenBullets
-          : Array.isArray((reviewResult as any).rewritten_bullets)
-            ? (reviewResult as any).rewritten_bullets
-            : [];
-        if (bullets.length > 0) {
-          textToTailor = applyRevisedBullets(cvText, bullets);
-          bullets.forEach((b: any) => {
-            appliedSuggestions.push(`Improved bullet: "${(b.original || '').slice(0, 60)}..."`);
-          });
-        }
-      } catch (_) {
-        /* continue with original text */
-      }
-
+      // Use only the candidate's original CV—no AI-rewritten bullets—so content is never mixed or fabricated
       const tailorResult = await qwenService.tailorCVReordered(
-        textToTailor,
+        cvText,
         job.title,
         job.description || '',
         skills
       );
 
       const tailoredCvText = (tailorResult.tailoredCvText || '').replace(/\\n/g, '\n');
-      const keyChanges = [...appliedSuggestions, ...(tailorResult.keyChanges || [])];
+      const keyChanges = tailorResult.keyChanges || [];
 
       let structuredResume: Record<string, unknown> | null = null;
       try {

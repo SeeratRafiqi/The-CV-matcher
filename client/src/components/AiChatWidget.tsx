@@ -1,17 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { aiChat } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { useAuthStore } from '@/store/auth';
+import { getFaqAnswer, getFaqSuggestions, FAQ_LIST } from '@/data/faq';
 import {
   MessageCircle,
   X,
   Send,
-  Loader2,
-  Sparkles,
   Minimize2,
+  HelpCircle,
 } from 'lucide-react';
 
 interface ChatEntry {
@@ -24,46 +21,50 @@ export function AiChatWidget() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<ChatEntry[]>([]);
-  const [suggestedActions, setSuggestedActions] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const mutation = useMutation({
-    mutationFn: (msg: string) => aiChat(msg, history),
-    onSuccess: (data, variables) => {
-      setHistory((h) => [
-        ...h,
-        { role: 'user', content: variables },
-        { role: 'assistant', content: data.response },
-      ]);
-      setSuggestedActions(data.suggestedActions || []);
-    },
-  });
+  const suggestions = getFaqSuggestions(6);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [history]);
 
   const handleSend = () => {
-    if (!input.trim() || mutation.isPending) return;
+    if (!input.trim()) return;
     const msg = input.trim();
     setInput('');
-    mutation.mutate(msg);
+
+    const faq = getFaqAnswer(msg);
+    const response = faq
+      ? faq.answer
+      : `I'm the CV Matcher FAQ assistant. I can answer questions about uploading your CV, job matching, applying, tailoring your resume, cover letters, and more. Try one of the suggested questions below, or ask something like "How do I upload my CV?" or "How does job matching work?"`;
+
+    setHistory((h) => [
+      ...h,
+      { role: 'user', content: msg },
+      { role: 'assistant', content: response },
+    ]);
   };
 
-  const handleSuggestion = (action: string) => {
+  const handleSuggestion = (question: string) => {
     setInput('');
-    mutation.mutate(action);
+    const entry = FAQ_LIST.find((e) => e.question === question);
+    const answer = entry ? entry.answer : (getFaqAnswer(question)?.answer ?? 'No answer found.');
+    setHistory((h) => [
+      ...h,
+      { role: 'user', content: question },
+      { role: 'assistant', content: answer },
+    ]);
   };
 
   if (!isAuthenticated) return null;
 
-  // Floating bubble
   if (!open) {
     return (
       <button
         onClick={() => setOpen(true)}
         className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center hover:scale-110 transition-transform"
-        aria-label="Open AI chat"
+        aria-label="Open FAQ"
       >
         <MessageCircle className="w-6 h-6" />
       </button>
@@ -72,11 +73,10 @@ export function AiChatWidget() {
 
   return (
     <div className="fixed bottom-6 right-6 z-50 w-[360px] h-[500px] bg-background border rounded-xl shadow-2xl flex flex-col overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b bg-primary text-primary-foreground rounded-t-xl">
         <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4" />
-          <span className="font-semibold text-sm">AI Assistant</span>
+          <HelpCircle className="w-4 h-4" />
+          <span className="font-semibold text-sm">FAQ</span>
         </div>
         <div className="flex gap-1">
           <button onClick={() => setOpen(false)} className="p-1 hover:bg-white/20 rounded">
@@ -88,29 +88,23 @@ export function AiChatWidget() {
         </div>
       </div>
 
-      {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
         {history.length === 0 && (
-          <div className="text-center py-8 space-y-3">
-            <Sparkles className="w-8 h-8 text-primary mx-auto" />
+          <div className="text-center py-6 space-y-3">
+            <HelpCircle className="w-8 h-8 text-primary mx-auto" />
             <p className="text-sm text-muted-foreground">
-              Hi {user?.name?.split(' ')[0] || 'there'}! How can I help you today?
+              Hi {user?.name?.split(' ')[0] || 'there'}! Ask a question or pick one below.
             </p>
-            <div className="flex flex-wrap gap-1.5 justify-center">
-              {(user?.role === 'candidate'
-                ? ['Improve my CV', 'Find matching jobs', 'Interview tips']
-                : user?.role === 'company'
-                ? ['Write a job description', 'Hiring tips', 'Review my posting']
-                : ['Platform overview', 'View stats']
-              ).map((q) => (
-                <Badge
+            <div className="flex flex-col gap-1.5">
+              {suggestions.map((q) => (
+                <button
                   key={q}
-                  variant="outline"
-                  className="cursor-pointer hover:bg-primary/10 text-xs"
+                  type="button"
+                  className="text-left text-xs px-3 py-2 rounded-lg border bg-muted/50 hover:bg-muted transition-colors"
                   onClick={() => handleSuggestion(q)}
                 >
                   {q}
-                </Badge>
+                </button>
               ))}
             </div>
           </div>
@@ -122,7 +116,7 @@ export function AiChatWidget() {
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[85%] px-3 py-2 rounded-lg text-sm ${
+              className={`max-w-[85%] px-3 py-2 rounded-lg text-sm whitespace-pre-wrap ${
                 msg.role === 'user'
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted'
@@ -132,33 +126,8 @@ export function AiChatWidget() {
             </div>
           </div>
         ))}
-
-        {mutation.isPending && (
-          <div className="flex justify-start">
-            <div className="bg-muted px-3 py-2 rounded-lg">
-              <Loader2 className="w-4 h-4 animate-spin" />
-            </div>
-          </div>
-        )}
-
-        {/* Suggested actions after last response */}
-        {suggestedActions.length > 0 && !mutation.isPending && history.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {suggestedActions.map((a) => (
-              <Badge
-                key={a}
-                variant="outline"
-                className="cursor-pointer hover:bg-primary/10 text-xs"
-                onClick={() => handleSuggestion(a)}
-              >
-                {a}
-              </Badge>
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* Input */}
       <div className="p-3 border-t">
         <form
           className="flex gap-2"
@@ -170,15 +139,11 @@ export function AiChatWidget() {
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask anything…"
+            placeholder="Ask a question…"
             className="text-sm"
             autoFocus
           />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={!input.trim() || mutation.isPending}
-          >
+          <Button type="submit" size="icon" disabled={!input.trim()}>
             <Send className="w-4 h-4" />
           </Button>
         </form>

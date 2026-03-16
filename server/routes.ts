@@ -23,6 +23,8 @@ import teamRoutes from "./routes/team.js";
 import aiRoutes from "./routes/ai.js";
 import coverLetterRoutes from "./routes/coverLetters.js";
 import interviewRoutes from "./routes/interviews.js";
+import voiceInterviewRoutes from "./routes/voiceInterview.js";
+import companyRoutes from "./routes/company.js";
 import { sanitizeStrings } from "./middleware/validate.js";
 
 export async function registerRoutes(
@@ -42,6 +44,7 @@ export async function registerRoutes(
   app.use("/api/cv", cvRoutes);
   app.use("/api/jobs", jobRoutes); // Admin/general job routes
   app.use("/api/company/jobs", companyJobRouter); // Company-specific job management
+  app.use("/api/company", companyRoutes); // Role suggestion, etc.
   app.use("/api", applicationRoutes); // Job browsing + applications
   app.use("/api/matches", matchRoutes);
   app.use("/api/candidates", noteRoutes); // Notes are under candidates
@@ -58,6 +61,7 @@ export async function registerRoutes(
   app.use("/api/ai", aiRoutes);
   app.use("/api/cover-letters", coverLetterRoutes);
   app.use("/api/interviews", interviewRoutes);
+  app.use("/api/voice-interviews", voiceInterviewRoutes);
 
   return httpServer;
 }

@@ -306,6 +306,56 @@ export interface InterviewAssessmentReport {
   generatedAt: string;
 }
 
+export type VoiceInterviewStatus = 'assigned' | 'in_progress' | 'completed' | 'expired';
+
+export interface VoiceInterviewSessionSummary {
+  id: string;
+  jobId: string;
+  jobTitle: string;
+  status: VoiceInterviewStatus;
+  currentQuestionIndex: number;
+  maxQuestions: number;
+  expiresAt: string;
+  completedAt?: string | null;
+}
+
+export interface VoiceInterviewSessionDetail {
+  id: string;
+  jobId: string;
+  jobTitle: string;
+  status: VoiceInterviewStatus;
+  currentQuestionIndex: number;
+  maxQuestions: number;
+  currentQuestion: string | null;
+  questionsCount: number;
+  expiresAt: string;
+  completedAt?: string | null;
+  startedAt?: string | null;
+  endsAt?: string | null;
+}
+
+export interface VoiceInterviewForApplication {
+  id: string;
+  jobId: string;
+  jobTitle: string;
+  status: VoiceInterviewStatus;
+  currentQuestionIndex: number;
+  maxQuestions: number;
+  expiresAt: string;
+  completedAt?: string | null;
+}
+
+export interface VoiceInterviewReport {
+  id: string;
+  applicationId?: string;
+  jobId: string;
+  jobTitle: string;
+  status: string;
+  completedAt: string | null;
+  outcome: string | null;
+  qa: { question: string; answer: string; answeredAt: string | null }[];
+}
+
 export interface BrowseJobsResponse {
   jobs: Job[];
   pagination: {

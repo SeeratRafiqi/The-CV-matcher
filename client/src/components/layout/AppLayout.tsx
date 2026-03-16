@@ -15,6 +15,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
   SidebarFooter,
+  useSidebar,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -91,6 +92,46 @@ const companyMenuItems = [
   { title: 'Team & Settings', url: '/company/settings', icon: Settings },
 ];
 
+type MenuItem = { title: string; url: string; icon: React.ComponentType<{ className?: string }> };
+
+function SidebarNavMenu({
+  menuItems,
+  roleLabel,
+  role,
+  location: currentLocation,
+}: {
+  menuItems: MenuItem[];
+  roleLabel: string;
+  role: string;
+  location: string;
+}) {
+  const { setOpenMobile } = useSidebar();
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel className="text-xs font-medium text-muted-foreground px-2">
+        {roleLabel}
+      </SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {menuItems.map((item) => {
+            const isActive = currentLocation === item.url || currentLocation.startsWith(item.url + '/');
+            return (
+              <SidebarMenuItem key={item.title}>
+                <SidebarMenuButton asChild isActive={isActive} className="w-full">
+                  <Link href={item.url} onClick={() => setOpenMobile(false)}>
+                    <item.icon className="w-4 h-4" />
+                    <span>{item.title}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          })}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
 export function AppLayout({ children }: AppLayoutProps) {
   const [location, setLocation] = useLocation();
   const { user, logout, theme, toggleTheme, isAuthenticated } = useAuthStore();
@@ -161,32 +202,12 @@ export function AppLayout({ children }: AppLayoutProps) {
           </SidebarHeader>
 
           <SidebarContent className="p-2">
-            <SidebarGroup>
-              <SidebarGroupLabel className="text-xs font-medium text-muted-foreground px-2">
-                {roleLabelMap[role]}
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {menuItems.map((item) => {
-                    const isActive = location === item.url || location.startsWith(item.url + '/');
-                    return (
-                      <SidebarMenuItem key={item.title}>
-                        <SidebarMenuButton
-                          asChild
-                          isActive={isActive}
-                          className="w-full"
-                        >
-                          <Link href={item.url}>
-                            <item.icon className="w-4 h-4" />
-                            <span>{item.title}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    );
-                  })}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
+            <SidebarNavMenu
+              menuItems={menuItems}
+              roleLabel={roleLabelMap[role]}
+              role={role}
+              location={location}
+            />
           </SidebarContent>
 
           <SidebarFooter className="p-3 border-t border-sidebar-border">

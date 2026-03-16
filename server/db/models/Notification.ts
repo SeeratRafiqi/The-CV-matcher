@@ -13,7 +13,8 @@ export type NotificationType =
   | 'interview_assigned'
   | 'interview_deadline_reminder'
   | 'interview_expired'
-  | 'interview_report_ready';
+  | 'interview_report_ready'
+  | 'role_suggestion';
 
 export interface NotificationAttributes {
   id: string;
@@ -64,7 +65,8 @@ Notification.init(
         'interview_assigned',
         'interview_deadline_reminder',
         'interview_expired',
-        'interview_report_ready'
+        'interview_report_ready',
+        'role_suggestion'
       ),
       allowNull: false,
     },

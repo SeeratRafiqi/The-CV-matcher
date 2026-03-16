@@ -25,6 +25,7 @@ import { InterviewAttempt } from './InterviewAttempt.js';
 import { InterviewAnswer } from './InterviewAnswer.js';
 import { InterviewReport } from './InterviewReport.js';
 import { TailoredResume } from './TailoredResume.js';
+import { VoiceInterviewSession } from './VoiceInterviewSession.js';
 
 // === User associations ===
 User.hasOne(Candidate, { foreignKey: 'user_id', as: 'candidateProfile' });
@@ -163,6 +164,14 @@ InterviewAnswer.belongsTo(InterviewQuestion, { foreignKey: 'question_id', as: 'q
 InterviewAttempt.hasOne(InterviewReport, { foreignKey: 'attempt_id', as: 'report' });
 InterviewReport.belongsTo(InterviewAttempt, { foreignKey: 'attempt_id', as: 'attempt' });
 
+// === Voice Interview ===
+Job.hasMany(VoiceInterviewSession, { foreignKey: 'job_id', as: 'voiceInterviewSessions' });
+VoiceInterviewSession.belongsTo(Job, { foreignKey: 'job_id', as: 'job' });
+Application.hasMany(VoiceInterviewSession, { foreignKey: 'application_id', as: 'voiceInterviewSessions' });
+VoiceInterviewSession.belongsTo(Application, { foreignKey: 'application_id', as: 'application' });
+Candidate.hasMany(VoiceInterviewSession, { foreignKey: 'candidate_id', as: 'voiceInterviewSessions' });
+VoiceInterviewSession.belongsTo(Candidate, { foreignKey: 'candidate_id', as: 'candidate' });
+
 export {
   sequelize,
   User,
@@ -191,4 +200,5 @@ export {
   InterviewAnswer,
   InterviewReport,
   TailoredResume,
+  VoiceInterviewSession,
 };

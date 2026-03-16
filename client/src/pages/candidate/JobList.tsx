@@ -538,9 +538,6 @@ export default function CandidateJobList() {
                           e.preventDefault();
                           e.stopPropagation();
                           setSingleApplyJobId(job.id);
-                          setSingleCoverLetter('');
-                          setSingleCvChoice('original');
-                          setSingleTailoredCvText(null);
                           setSingleApplyOpen(true);
                         }}
                       >

@@ -6,9 +6,11 @@ import {
   getApplicationsForJob,
   updateApplicationStatus,
   updateCompanyJob,
-  getMatchesForJob,
+  getEnrichedMatchesForJob,
   createConversation,
   deleteCompanyJob,
+  canSendRoleSuggestion,
+  sendRoleSuggestion,
 } from '@/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -107,6 +109,15 @@ export default function CompanyJobDetail() {
     candidateName: string;
   }>({ open: false, candidateUserId: '', candidateName: '' });
   const [messageText, setMessageText] = useState('');
+  const [roleSuggestionDialog, setRoleSuggestionDialog] = useState<{
+    open: boolean;
+    candidateUserId: string;
+    candidateName: string;
+    suggestedJobId: string;
+    suggestedJobTitle: string;
+    templateType: 'better_fit' | 'both_roles';
+    message: string;
+  } | null>(null);
 
   const { data: job, isLoading: jobLoading } = useQuery({
     queryKey: ['company-job', jobId],
@@ -124,14 +135,16 @@ export default function CompanyJobDetail() {
     enabled: !!jobId,
   });
 
-  // Fetch matched candidates for this job
+  // Fetch enriched matched candidates (includes appliedTo, bestFit, otherStrongFits)
   const { data: matchedCandidates, isLoading: matchesLoading } = useQuery({
-    queryKey: ['matches-for-job', jobId],
-    queryFn: () => getMatchesForJob(jobId),
+    queryKey: ['enriched-matches-for-job', jobId],
+    queryFn: () => getEnrichedMatchesForJob(jobId),
     enabled: !!jobId,
   });
 
-  const filteredMatches = (matchedCandidates || []).filter((m: any) => m.score >= minScore);
+  const filteredMatches = Array.isArray(matchedCandidates)
+    ? matchedCandidates.filter((m: any) => m.score == null || m.score >= minScore)
+    : [];
 
   // Message mutation
   const messageMutation = useMutation({
@@ -190,6 +203,19 @@ export default function CompanyJobDetail() {
     },
     onError: (error: any) => {
       toast({ title: 'Unable to delete job', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  const sendRoleSuggestionMutation = useMutation({
+    mutationFn: (data: { candidateUserId: string; suggestedJobId?: string; suggestedJobTitle?: string; templateType: 'better_fit' | 'both_roles'; message?: string }) =>
+      sendRoleSuggestion({ ...data, jobId }),
+    onSuccess: () => {
+      toast({ title: 'Role suggestion sent' });
+      setRoleSuggestionDialog(null);
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    },
+    onError: (error: any) => {
+      toast({ title: 'Failed to send', description: error.message, variant: 'destructive' });
     },
   });
 
@@ -541,7 +567,11 @@ export default function CompanyJobDetail() {
                               </p>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
-                              <ScoreBadge score={match.score} size="sm" />
+                              {match.score != null ? (
+                                <ScoreBadge score={match.score} size="sm" />
+                              ) : (
+                                <span className="text-xs text-muted-foreground font-medium">Not scored</span>
+                              )}
                               <StatusChip status={match.status} />
                             </div>
                           </div>
@@ -558,6 +588,28 @@ export default function CompanyJobDetail() {
                               <span className="flex items-center gap-0.5">
                                 <Briefcase className="w-3 h-3" />
                                 {c.totalYearsExperience}y exp
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Applied to / Best fit */}
+                          <div className="flex flex-wrap gap-2 mt-2 text-xs">
+                            {match.appliedTo && (
+                              <span className="text-muted-foreground">
+                                Applied to: <strong className="text-foreground">{match.appliedTo.jobTitle}</strong>
+                              </span>
+                            )}
+                            {match.bestFit && (
+                              <span className="text-muted-foreground inline-flex items-center gap-1">
+                                Best fit: <strong className="text-foreground">{match.bestFit.jobTitle}</strong>
+                                {match.bestFit.score != null && (
+                                  <ScoreBadge score={match.bestFit.score} size="sm" />
+                                )}
+                              </span>
+                            )}
+                            {match.otherStrongFits && match.otherStrongFits.length > 0 && (
+                              <span className="text-muted-foreground">
+                                Strong fit: {match.otherStrongFits.map((s: any) => s.jobTitle).join(', ')}
                               </span>
                             )}
                           </div>
@@ -579,7 +631,7 @@ export default function CompanyJobDetail() {
                           )}
 
                           {/* Actions */}
-                          <div className="flex items-center gap-2 mt-3">
+                          <div className="flex flex-wrap items-center gap-2 mt-3">
                             <Button
                               variant="outline"
                               size="sm"
@@ -610,6 +662,59 @@ export default function CompanyJobDetail() {
                               >
                                 <MessageSquare className="w-3.5 h-3.5" />
                                 Message
+                              </Button>
+                            )}
+                            {c.userId && match.bestFit && match.bestFit.jobId !== jobId && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                className="gap-1"
+                                onClick={async () => {
+                                  const { allowed } = await canSendRoleSuggestion(c.userId);
+                                  if (!allowed) {
+                                    toast({ title: 'Already sent', description: 'A role suggestion was sent to this candidate in the last 7 days.', variant: 'destructive' });
+                                    return;
+                                  }
+                                  const msg = `Hi ${c.name}, we noticed your profile is a strong fit for our ${match.bestFit.jobTitle} role. Would you be open to us considering you for that position as well? Best, The team`;
+                                  setRoleSuggestionDialog({
+                                    open: true,
+                                    candidateUserId: c.userId,
+                                    candidateName: c.name,
+                                    suggestedJobId: match.bestFit.jobId,
+                                    suggestedJobTitle: match.bestFit.jobTitle,
+                                    templateType: 'better_fit',
+                                    message: msg,
+                                  });
+                                }}
+                              >
+                                Suggest role (better fit)
+                              </Button>
+                            )}
+                            {c.userId && match.otherStrongFits?.length > 0 && match.appliedTo?.jobId === jobId && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                className="gap-1"
+                                onClick={async () => {
+                                  const { allowed } = await canSendRoleSuggestion(c.userId);
+                                  if (!allowed) {
+                                    toast({ title: 'Already sent', description: 'A role suggestion was sent to this candidate in the last 7 days.', variant: 'destructive' });
+                                    return;
+                                  }
+                                  const other = match.otherStrongFits[0];
+                                  const msg = `Hi ${c.name}, your background fits well with both our ${job.title} and ${other.jobTitle} openings. You applied for ${job.title}; we're happy to consider you for either. Would you like to be considered for both, or keep your application to ${job.title} only? Best, The team`;
+                                  setRoleSuggestionDialog({
+                                    open: true,
+                                    candidateUserId: c.userId,
+                                    candidateName: c.name,
+                                    suggestedJobId: other.jobId,
+                                    suggestedJobTitle: other.jobTitle,
+                                    templateType: 'both_roles',
+                                    message: msg,
+                                  });
+                                }}
+                              >
+                                Suggest role (fits both)
                               </Button>
                             )}
                           </div>
@@ -885,7 +990,11 @@ export default function CompanyJobDetail() {
           {selectedMatch && (
             <div className="space-y-4 py-2">
               <div className="flex items-center gap-3">
-                <ScoreBadge score={selectedMatch.score} size="md" showLabel />
+                {selectedMatch.score != null ? (
+                  <ScoreBadge score={selectedMatch.score} size="md" showLabel />
+                ) : (
+                  <span className="text-sm text-muted-foreground font-medium">Not scored yet</span>
+                )}
                 <StatusChip status={selectedMatch.status} />
               </div>
 
@@ -1025,6 +1134,57 @@ export default function CompanyJobDetail() {
                 <Send className="w-4 h-4" />
               )}
               Send Message
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Role suggestion dialog (pre-defined templates, throttle 7 days) */}
+      <Dialog
+        open={!!roleSuggestionDialog}
+        onOpenChange={(open) => !open && setRoleSuggestionDialog(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Suggest role</DialogTitle>
+            <DialogDescription>
+              Send a message to {roleSuggestionDialog?.candidateName} about the {roleSuggestionDialog?.templateType === 'both_roles' ? 'other' : ''} role. You can edit the message below. Only one role suggestion per candidate per 7 days.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Textarea
+              value={roleSuggestionDialog?.message ?? ''}
+              onChange={(e) =>
+                setRoleSuggestionDialog((prev) => (prev ? { ...prev, message: e.target.value } : null))
+              }
+              rows={6}
+              className="resize-none"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRoleSuggestionDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                roleSuggestionDialog &&
+                sendRoleSuggestionMutation.mutate({
+                  candidateUserId: roleSuggestionDialog.candidateUserId,
+                  suggestedJobId: roleSuggestionDialog.suggestedJobId,
+                  suggestedJobTitle: roleSuggestionDialog.suggestedJobTitle,
+                  templateType: roleSuggestionDialog.templateType,
+                  message: roleSuggestionDialog.message,
+                })
+              }
+              disabled={!roleSuggestionDialog?.message?.trim() || sendRoleSuggestionMutation.isPending}
+              className="gap-2"
+            >
+              {sendRoleSuggestionMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+              Send suggestion
             </Button>
           </DialogFooter>
         </DialogContent>

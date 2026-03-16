@@ -1,4 +1,5 @@
 import sequelize from './config.js';
+import { DataTypes } from 'sequelize';
 import {
   User,
   Candidate,
@@ -21,6 +22,7 @@ import {
   CompanyMember,
   CoverLetter,
   TailoredResume,
+  VoiceInterviewSession,
   InterviewAssessment,
   InterviewQuestion,
   InterviewAttempt,
@@ -115,6 +117,7 @@ async function migrate() {
       { name: 'CompanyMember', model: CompanyMember, table: 'company_members' },
       { name: 'CoverLetter', model: CoverLetter, table: 'cover_letters' },
       { name: 'TailoredResume', model: TailoredResume, table: 'tailored_resumes' },
+      { name: 'VoiceInterviewSession', model: VoiceInterviewSession, table: 'voice_interview_sessions' },
       { name: 'InterviewAssessment', model: InterviewAssessment, table: 'interview_assessments' },
       { name: 'InterviewQuestion', model: InterviewQuestion, table: 'interview_questions' },
       { name: 'InterviewAttempt', model: InterviewAttempt, table: 'interview_attempts' },
@@ -322,6 +325,61 @@ async function migrate() {
     await addColumn('interview_questions', 'order_index',
       `ALTER TABLE interview_questions ADD COLUMN order_index INT NOT NULL DEFAULT 0`
     );
+
+    // ---------- voice_interview_sessions ----------
+    console.log('\n[voice_interview_sessions]');
+    const dialect = sequelize.getDialect();
+    if (dialect === 'sqlite') {
+      try {
+        await sequelize.getQueryInterface().addColumn('voice_interview_sessions', 'outcome', {
+          type: sequelize.Sequelize.TEXT,
+          allowNull: true,
+        });
+        console.log('  ✓ Added voice_interview_sessions.outcome');
+      } catch (err: any) {
+        if (err?.message?.includes('duplicate') || err?.message?.includes('already exists')) {
+          console.log('  ✓ voice_interview_sessions.outcome already exists');
+        } else {
+          console.warn('  ⚠️ voice_interview_sessions.outcome:', err?.message?.substring(0, 80));
+        }
+      }
+    } else {
+      await addColumn('voice_interview_sessions', 'outcome', `ALTER TABLE voice_interview_sessions ADD COLUMN outcome TEXT NULL`);
+    }
+    if (dialect === 'sqlite') {
+      try {
+        await sequelize.getQueryInterface().addColumn('voice_interview_sessions', 'duration_minutes', {
+          type: DataTypes.INTEGER,
+          allowNull: true,
+        });
+        console.log('  ✓ Added voice_interview_sessions.duration_minutes');
+      } catch (err: any) {
+        if (err?.message?.includes('duplicate') || err?.message?.includes('already exists')) {
+          console.log('  ✓ voice_interview_sessions.duration_minutes already exists');
+        } else {
+          console.warn('  ⚠️ voice_interview_sessions.duration_minutes:', err?.message?.substring(0, 80));
+        }
+      }
+    } else {
+      await addColumn('voice_interview_sessions', 'duration_minutes', `ALTER TABLE voice_interview_sessions ADD COLUMN duration_minutes INT NULL`);
+    }
+    if (dialect === 'sqlite') {
+      try {
+        await sequelize.getQueryInterface().addColumn('voice_interview_sessions', 'conductor_state', {
+          type: DataTypes.TEXT,
+          allowNull: true,
+        });
+        console.log('  ✓ Added voice_interview_sessions.conductor_state');
+      } catch (err: any) {
+        if (err?.message?.includes('duplicate') || err?.message?.includes('already exists')) {
+          console.log('  ✓ voice_interview_sessions.conductor_state already exists');
+        } else {
+          console.warn('  ⚠️ voice_interview_sessions.conductor_state:', err?.message?.substring(0, 80));
+        }
+      }
+    } else {
+      await addColumn('voice_interview_sessions', 'conductor_state', `ALTER TABLE voice_interview_sessions ADD COLUMN conductor_state TEXT NULL`);
+    }
 
     // ---------- conversations ----------
     console.log('\n[conversations]');

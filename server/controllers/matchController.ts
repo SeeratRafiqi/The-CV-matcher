@@ -79,6 +79,181 @@ export class MatchController extends BaseController {
     });
   }
 
+  /** Enriched matches for a company job: same as getForJob but adds appliedTo, bestFit, otherStrongFits per candidate. */
+  async getEnrichedMatchesForCompanyJob(req: AuthRequest, res: Response) {
+    await this.handleRequest(req, res, async () => {
+      if (!req.user) throw Object.assign(new Error('Authentication required'), { status: 401 });
+
+      const jobId = (req.params as any).jobId || (req.params as any).id;
+      if (!jobId) throw Object.assign(new Error('Job ID required'), { status: 400 });
+
+      const job = await Job.findByPk(jobId, { attributes: ['id', 'company_id', 'title'] });
+      if (!job) throw Object.assign(new Error('Job not found'), { status: 404 });
+
+      const company = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
+      if (!company || (job as any).company_id !== company.id) {
+        throw Object.assign(new Error('Access denied'), { status: 403 });
+      }
+
+      const companyJobIds = (await Job.findAll({
+        where: { company_id: company.id, status: 'published' },
+        attributes: ['id'],
+      })).map((j: any) => j.id);
+
+      const jobMap = new Map(
+        (await Job.findAll({ where: { id: { [Op.in]: companyJobIds } }, attributes: ['id', 'title'] }))
+          .map((j: any) => [j.id, j])
+      );
+
+      const matches = await Match.findAll({
+        where: { job_id: jobId },
+        include: [
+          {
+            model: Candidate,
+            as: 'candidate',
+            attributes: ['id', 'user_id', 'name', 'email', 'phone', 'country', 'country_code', 'headline', 'photo_url', 'bio', 'linkedin_url', 'github_url', 'portfolio_url'],
+            include: [
+              {
+                model: CandidateMatrix,
+                as: 'matrices',
+                attributes: ['id', 'skills', 'roles', 'total_years_experience', 'domains', 'education', 'languages', 'generated_at'],
+                limit: 1,
+                order: [['generated_at', 'DESC']],
+                required: false,
+              },
+            ],
+          },
+        ],
+        order: [['score', 'DESC']],
+      });
+
+      const filteredMatches = matches.filter((m: any) => (typeof m.score === 'number' ? m.score : 0) >= 25);
+      const candidateIds = filteredMatches.map((m: any) => m.candidate_id);
+      const matchedCandidateIds = new Set(candidateIds);
+
+      // Applications for this job (for appliedTo) and for building bestFit across company jobs
+      const applicationsForJob = await Application.findAll({
+        where: { job_id: { [Op.in]: companyJobIds }, status: { [Op.ne]: 'withdrawn' } },
+        include: [
+          { model: Job, as: 'job', attributes: ['id', 'title'] },
+          {
+            model: Candidate,
+            as: 'candidate',
+            attributes: ['id', 'user_id', 'name', 'email', 'phone', 'country', 'country_code', 'headline', 'photo_url', 'bio', 'linkedin_url', 'github_url', 'portfolio_url'],
+            include: [
+              {
+                model: CandidateMatrix,
+                as: 'matrices',
+                attributes: ['id', 'skills', 'roles', 'total_years_experience', 'domains', 'education', 'languages', 'generated_at'],
+                limit: 1,
+                order: [['generated_at', 'DESC']],
+                required: false,
+              },
+            ],
+          },
+        ],
+        order: [['applied_at', 'DESC']],
+      });
+
+      const appliedToByCandidate = new Map<string, { jobId: string; jobTitle: string }>();
+      for (const app of applicationsForJob) {
+        const cid = (app as any).candidate_id;
+        if (!appliedToByCandidate.has(cid)) {
+          const j = (app as any).job;
+          appliedToByCandidate.set(cid, { jobId: (app as any).job_id, jobTitle: j?.title || 'Unknown' });
+        }
+      }
+
+      const allCandidatesWithMatches = new Set(candidateIds);
+      const allMatchesForCandidates = await Match.findAll({
+        where: { candidate_id: { [Op.in]: [...matchedCandidateIds] }, job_id: { [Op.in]: companyJobIds } },
+        attributes: ['candidate_id', 'job_id', 'score'],
+        order: [['score', 'DESC']],
+      });
+
+      const STRONG_SCORE = 70;
+      const byCandidate = new Map<string, { jobId: string; jobTitle: string; score: number }[]>();
+      for (const m of allMatchesForCandidates) {
+        const cid = (m as any).candidate_id;
+        if (!byCandidate.has(cid)) byCandidate.set(cid, []);
+        const j = jobMap.get((m as any).job_id);
+        byCandidate.get(cid)!.push({
+          jobId: (m as any).job_id,
+          jobTitle: j?.title || 'Unknown',
+          score: (m as any).score || 0,
+        });
+      }
+
+      const currentJobTitle = (job as any).title || 'Unknown';
+
+      const toEnriched = (m: any, appliedTo: { jobId: string; jobTitle: string } | null, bestFit: { jobId: string; jobTitle: string; score: number } | null, otherStrongFits: { jobId: string; jobTitle: string; score: number }[], c: any, matrix: any) => ({
+        id: m.id,
+        candidateId: (m as any).candidate_id,
+        jobId: (m as any).job_id,
+        score: (m as any).score,
+        breakdown: (m as any).breakdown,
+        explanation: (m as any).explanation,
+        gaps: (m as any).gaps,
+        status: (m as any).status,
+        calculatedAt: (m as any).calculated_at,
+        appliedTo,
+        bestFit,
+        otherStrongFits: otherStrongFits.slice(0, 5),
+        candidate: c ? {
+          id: c.id,
+          userId: c.user_id,
+          name: c.name,
+          email: c.email,
+          headline: c.headline,
+          photoUrl: c.photo_url,
+          country: c.country,
+          countryCode: c.country_code,
+          bio: c.bio,
+          linkedinUrl: c.linkedin_url,
+          githubUrl: c.github_url,
+          portfolioUrl: c.portfolio_url,
+          skills: matrix?.skills || [],
+          roles: matrix?.roles || [],
+          totalYearsExperience: matrix?.total_years_experience || 0,
+          domains: matrix?.domains || [],
+          education: matrix?.education || [],
+        } : null,
+      });
+
+      const result: any[] = filteredMatches.map((m: any) => {
+        const c = m.candidate;
+        const matrix = c?.matrices?.[0];
+        const candidateId = (m as any).candidate_id;
+        const appliedTo = appliedToByCandidate.get(candidateId) || null;
+        const allScores = byCandidate.get(candidateId) || [];
+        const bestFit = allScores[0] ? { jobId: allScores[0].jobId, jobTitle: allScores[0].jobTitle, score: allScores[0].score } : null;
+        const otherStrongFits = allScores.filter((s: any, i: number) => i > 0 && s.score >= STRONG_SCORE);
+        return toEnriched(m, appliedTo, bestFit, otherStrongFits, c, matrix);
+      });
+
+      // Include applicants to THIS job who have no Match yet (so "Matched candidates" shows all applicants; unscored show as "Not scored")
+      const applicationsToThisJob = applicationsForJob.filter((a: any) => a.job_id === jobId);
+      for (const app of applicationsToThisJob) {
+        const cid = (app as any).candidate_id;
+        if (matchedCandidateIds.has(cid)) continue;
+        matchedCandidateIds.add(cid);
+        const c = (app as any).candidate;
+        const matrix = c?.matrices?.[0];
+        const appliedTo = { jobId: (job as any).id, jobTitle: currentJobTitle };
+        result.push(toEnriched(
+          { id: `app-${(app as any).id}`, candidate_id: cid, job_id: jobId, score: null, breakdown: null, explanation: null, gaps: null, status: null, calculated_at: null },
+          appliedTo,
+          null,
+          [],
+          c,
+          matrix
+        ));
+      }
+
+      return result;
+    });
+  }
+
   // ==================== GET all matched candidates across all company jobs ====================
   async getCompanyMatches(req: AuthRequest, res: Response) {
     await this.handleRequest(req, res, async () => {

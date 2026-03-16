@@ -44,6 +44,9 @@ import CompanySettings from "@/pages/company/Settings";
 import CandidateApplications from "@/pages/candidate/Applications";
 import CandidateInterviews from "@/pages/candidate/Interviews";
 import CandidateInterviewAssessment from "@/pages/candidate/InterviewAssessment";
+import VoiceInterviewRoom from "@/pages/candidate/VoiceInterviewRoom";
+import VoiceInterviewReport from "@/pages/candidate/VoiceInterviewReport";
+import TestVoiceInterview from "@/pages/candidate/TestVoiceInterview";
 
 // Candidate pages (Phase 4 & 5)
 import CandidateSavedJobs from "@/pages/candidate/SavedJobs";
@@ -297,6 +300,27 @@ function Router() {
         <ProtectedRoute>
           <CandidateRoute>
             <CandidateInterviewAssessment />
+          </CandidateRoute>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/candidate/test-voice-interview">
+        <ProtectedRoute>
+          <CandidateRoute>
+            <TestVoiceInterview />
+          </CandidateRoute>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/candidate/voice-interviews/:id/report">
+        <ProtectedRoute>
+          <CandidateRoute>
+            <VoiceInterviewReport />
+          </CandidateRoute>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/candidate/voice-interviews/:id">
+        <ProtectedRoute>
+          <CandidateRoute>
+            <VoiceInterviewRoom />
           </CandidateRoute>
         </ProtectedRoute>
       </Route>

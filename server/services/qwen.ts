@@ -11,6 +11,32 @@ interface QwenResponse {
   }>;
 }
 
+// ============================================================
+//  AI INTERVIEW CONDUCTOR — State machine types (exported for controller use)
+// ============================================================
+
+export type InterviewPhase =
+  | 'greeting'
+  | 'small_talk'
+  | 'context_setting'
+  | 'ready_check'
+  | 'interview'
+  | 'closing';
+
+export interface InterviewState {
+  phase: InterviewPhase;
+  questionIndex: number;
+  smallTalkTurns: number;
+  conversationHistory: { role: 'user' | 'assistant'; content: string }[];
+  questions: string[];
+  candidateName: string;
+  jobTitle: string;
+  interviewerName?: string;
+  preferredLanguage?: string;
+  /** Set when we offered reschedule due to technical issues; next "yes" ends the call. */
+  rescheduleOffered?: boolean;
+}
+
 export class QwenService {
   private apiKey: string;
   private apiUrl: string;
@@ -203,6 +229,51 @@ export class QwenService {
     }
 
     throw lastError || new Error('Qwen API call failed after retries');
+  }
+
+  /**
+   * Call Qwen with full conversation history (system + user/assistant messages).
+   * Use this when the model needs to see prior turns to stay in context (e.g. voice interview).
+   */
+  private async callQwenWithMessages(
+    systemPrompt: string,
+    messages: { role: 'user' | 'assistant'; content: string }[],
+    jsonMode: boolean = true
+  ): Promise<string> {
+    if (!this.apiKey) {
+      throw new Error('ALIBABA_LLM_API_KEY not configured. Set it in .env for AI features.');
+    }
+    const endpoint = this.apiUrl.endsWith('/chat/completions')
+      ? this.apiUrl
+      : `${this.apiUrl}/chat/completions`;
+    const fullMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+      { role: 'system', content: systemPrompt },
+      ...messages,
+    ];
+    const requestBody: any = {
+      model: this.model,
+      messages: fullMessages,
+    };
+    if (jsonMode) {
+      requestBody.response_format = { type: 'json_object' };
+    }
+    const response = await axios.post<QwenResponse>(endpoint, requestBody, {
+      headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+      timeout: 60000,
+    });
+    const content = response.data.choices?.[0]?.message?.content;
+    if (!content) throw new Error('Empty response from Qwen API');
+    if (jsonMode) {
+      try {
+        const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/```\n([\s\S]*?)\n```/);
+        const jsonString = jsonMatch ? jsonMatch[1] : content;
+        const parsed = JSON.parse(jsonString);
+        return JSON.stringify(parsed);
+      } catch {
+        return content;
+      }
+    }
+    return content;
   }
 
   async extractCandidateInfo(cvText: string): Promise<{
@@ -1499,6 +1570,540 @@ Return JSON only:
       concerns: Array.isArray(parsed?.concerns) ? parsed.concerns.map((x: any) => String(x)) : [],
       recommendation: String(parsed?.recommendation || ''),
     };
+  }
+
+  /**
+   * Voice interview: generate one natural, conversational question (or follow-up).
+   * Uses phased flow: Greeting & small talk → Set context → Check readiness → Interview questions → Closing.
+   */
+  async generateVoiceInterviewQuestion(params: {
+    jobTitle: string;
+    jobDescription: string;
+    jobSkills: string[];
+    candidateContext?: string;
+    candidateName?: string;
+    previousQAndA: { question: string; answer: string }[];
+    questionIndex: number;
+    maxQuestions: number;
+    durationMinutes?: number;
+  }): Promise<{ question: string }> {
+    const { jobTitle, jobDescription, jobSkills, candidateContext, candidateName, previousQAndA, questionIndex, maxQuestions, durationMinutes } = params;
+    const firstName = candidateName?.trim() ? candidateName.trim().split(/\s+/)[0] : null;
+    const candidateNamePlaceholder = firstName || 'there';
+    const durationPlaceholder = durationMinutes != null ? String(durationMinutes) : '10';
+
+    // Fixed script for guaranteed conversational flow (greeting → set context → check readiness → questions → closing)
+    if (questionIndex === 0) {
+      return {
+        question: `Hi ${candidateNamePlaceholder}! Great to have you here today. I'm Aria, and I'll be conducting your interview. How are you doing? Hope you didn't have any trouble joining the call!`,
+      };
+    }
+    if (questionIndex === 1) {
+      return {
+        question: `So today we'll be spending about ${durationPlaceholder} minutes together. I'll be asking you a mix of technical and behavioral questions related to the ${jobTitle} role. Feel free to take your time on each answer, and if any question is unclear just let me know!`,
+      };
+    }
+    if (questionIndex === 2) {
+      return {
+        question: "Alright, I think that covers everything! Are you ready to get started, or do you have any questions before we begin?",
+      };
+    }
+    if (questionIndex >= maxQuestions - 1 && maxQuestions > 3) {
+      return {
+        question: "That brings us to the end of the interview! You did great. We'll review everything and get back to you soon. Do you have any questions for me before we wrap up?",
+      };
+    }
+
+    const systemPrompt = `You are a professional and friendly AI interviewer conducting a job interview. Your goal is to make the candidate feel comfortable before diving into the actual interview questions.
+
+## Your Personality
+- Warm, professional, and encouraging
+- Conversational and natural — never robotic or stiff
+- Patient and attentive
+- Sound like a real human recruiter, not a checklist
+
+---
+
+## Interview Flow
+
+### Phase 1: Greeting & Small Talk (Do this FIRST, always)
+When the candidate joins, greet them warmly. Introduce yourself. Ask how they're doing or if they had any trouble joining. Keep it light and natural.
+
+Example opening:
+"Hi [Candidate Name]! Great to have you here today. I'm Aria, and I'll be conducting your interview. How are you doing? Hope you didn't have any trouble joining the call!"
+
+Then engage in 1–2 exchanges of small talk based on their response. Be genuine, not scripted.
+
+### Phase 2: Set Context
+Briefly explain what this interview will look like:
+- How long it will take
+- What topics/areas will be covered (based on the JD)
+- That they can ask for clarification on any question
+
+Example:
+"So today we'll be spending about [X] minutes together. I'll be asking you a mix of technical and behavioral questions related to the [Job Title] role. Feel free to take your time on each answer, and if any question is unclear just let me know!"
+
+### Phase 3: Check Readiness
+Before jumping into questions, explicitly ask if the candidate is ready.
+
+Example:
+"Alright, I think that covers everything! Are you ready to get started, or do you have any questions before we begin?"
+
+Wait for confirmation. If they have questions, answer them naturally. Only proceed when they confirm they're ready.
+
+### Phase 4: Interview Questions
+Once the candidate confirms they're ready, transition naturally into the first question.
+
+Example transition:
+"Perfect! Let's dive in then. So, [Question 1]..."
+
+Ask one question at a time. After each answer:
+- Acknowledge their response briefly ("That's a great example", "Interesting approach", "Got it, thanks for sharing that")
+- Then move to the next question naturally
+
+### Phase 5: Closing
+After all questions are done, close warmly:
+"That brings us to the end of the interview! You did great. We'll review everything and get back to you soon. Do you have any questions for me before we wrap up?"
+
+---
+
+## Rules
+- NEVER start with a question directly. Always greet first.
+- NEVER rush the candidate.
+- Keep acknowledgements short and varied — don't repeat "Great answer!" every time.
+- Stay in character as a human interviewer at all times.
+- Use the candidate's name occasionally to keep it personal.
+- Mirror the candidate's energy — if they're nervous, be extra warm; if they're confident, match their pace.
+
+---
+
+## IMPORTANT — Phase gating
+- Track which phase you are in from the conversation history above. Never skip phases.
+- You are currently in Phase 4 (Interview questions). The candidate has already been greeted, context set, and asked if they are ready. Do NOT repeat greeting, set context, or "are you ready?" — generate only the next interview line (acknowledgement + next question, or closing when appropriate).
+- Only move to interview questions AFTER the candidate has explicitly said they are ready (e.g. "yes", "ready", "let's go"). The conversation history shows what they said; use it.`;
+
+    // Build full conversation history for the model (so it has memory of every turn)
+    const conversationMessages: { role: 'user' | 'assistant'; content: string }[] = [];
+    for (let i = 0; i < previousQAndA.length; i++) {
+      conversationMessages.push({ role: 'assistant', content: previousQAndA[i].question });
+      conversationMessages.push({
+        role: 'user',
+        content: (previousQAndA[i].answer || '(no response)').substring(0, 500),
+      });
+    }
+
+    const phaseHint =
+      questionIndex === 0
+        ? `CRITICAL — This is the VERY FIRST thing the candidate hears. You MUST start with a warm greeting, NOT a question.
+
+You MUST:
+1. Greet the candidate by name: "Hi ${candidateNamePlaceholder}!" (use their first name).
+2. Say you're glad they're here and introduce yourself: "I'm Aria, and I'll be conducting your interview today."
+3. Ask how they are or if they had any trouble joining: "How are you doing? Hope you didn't have any trouble joining the call!"
+
+Output a single greeting that does all of the above in 2–3 short sentences. Example: "Hi ${candidateNamePlaceholder}! Great to have you here today. I'm Aria, and I'll be conducting your interview. How are you doing? Hope you didn't have any trouble joining the call!" Do NOT ask an interview question yet.`
+        : questionIndex === 1
+          ? `Generate your NEXT line only. Phase 1 small talk or start of Phase 2. Candidate said: "${(previousQAndA[0]?.answer ?? '').substring(0, 300)}". Respond naturally (acknowledge, maybe one more small talk or begin setting context). One or two sentences.`
+          : questionIndex === 2
+            ? `Generate your NEXT line only. Phase 2: Set context. Tell them the interview will take about ${durationPlaceholder} minutes, you'll ask technical and behavioral questions for the ${jobTitle} role, and they can ask for clarification. Keep it brief and warm.`
+            : questionIndex === 3
+              ? `Generate your NEXT line only. Phase 3: Check readiness. Ask if they're ready to get started or if they have any questions before you begin. One sentence.`
+              : questionIndex === 4
+                ? `Generate your NEXT line only. Phase 4: Transition into first real question. Acknowledge their readiness, then ask your first interview question (based on the job and their resume). One question.`
+                : questionIndex >= maxQuestions - 1
+                  ? `Generate your NEXT line only. Phase 5: Closing. Thank them, say they did great, you'll review and get back to them, and ask if they have any questions before you wrap up. Warm and short.`
+                  : `Generate your NEXT line only. Phase 4: Interview question. Conversation so far is above. Briefly acknowledge their last answer (varied, not "Great answer!" again), then ask the next interview question (technical or behavioral, relevant to the role and their experience). One question only.`;
+
+    const systemWithContext = `${systemPrompt}
+
+---
+
+## Current context
+- Job title: ${jobTitle}
+- Job description (excerpt): ${(jobDescription || '').substring(0, 2000)}
+- Key skills: ${(jobSkills || []).join(', ')}
+- Candidate's first name: ${candidateNamePlaceholder}
+- Candidate's resume (excerpt): ${candidateContext ? candidateContext.substring(0, 1000) : 'Not provided.'}`;
+
+    const lastUserMessage = `Generate ONLY your next line as Aria (turn ${questionIndex + 1}). ${phaseHint}
+
+Return ONLY valid JSON: { "question": "Your single interview line or question here." }`;
+
+    conversationMessages.push({ role: 'user', content: lastUserMessage });
+
+    const response = await this.callQwenWithMessages(systemWithContext, conversationMessages, true);
+    const parsed = JSON.parse(response);
+    let question = typeof parsed?.question === 'string' ? parsed.question.trim() : '';
+    if (!question) {
+      question = 'Tell me about a challenge you faced in a recent project and how you overcame it.';
+    }
+    return { question };
+  }
+
+  /**
+   * Generate a short outcome/summary of the voice interview for the candidate and recruiter.
+   * Evidence-based only: do not attribute strengths or positive traits unless clearly demonstrated in the answers.
+   */
+  async generateVoiceInterviewOutcome(params: {
+    jobTitle: string;
+    questions: string[];
+    answers: string[];
+    expressionSummary?: string | null;
+  }): Promise<{ outcome: string }> {
+    const { jobTitle, questions, answers, expressionSummary } = params;
+
+    // Detect non-substantive answers: empty, placeholder, or nonsensical (e.g. random letters, gibberish)
+    const rawAnswers = (answers || []).map((a) => (a || '').trim());
+    const normalizedAnswers = rawAnswers.map((a) => a.toLowerCase());
+    const placeholderPatterns = ['(no answer)', 'no answer provided', 'n/a', 'na', 'none', '—', '--'];
+    const totalLength = rawAnswers.join(' ').length;
+    const allPlaceholderOrEmpty = normalizedAnswers.every((a) => !a || placeholderPatterns.some((p) => a.includes(p)) || a.length < 3);
+    const veryShortOrEmpty = totalLength < 25;
+
+    // Gibberish: no real English words, or mostly repeated chars / random letters
+    const text = rawAnswers.join(' ');
+    const commonWords = /\b(the|and|for|was|have|with|this|that|from|are|were|been|said|each|about|when|which|their|would|there|could|other|into|more|these|some|what|than|first|your|them|will|after|where|many|then|being|over|such|just|most|also|back|through|before|right|while|during|made|should|because|between|under|again|those|very|same|another|here|next|last|might|still|find|every|think|both|often|until|much|going|never|little|since|always|yes|no|ok|okay|good|well|really|actually|think|thought|know|work|experience|project|team|role|job|skills)\b/i;
+    const realWordCount = (text.match(commonWords) || []).length;
+    const looksLikeGibberish = totalLength >= 10 && realWordCount < 2;
+    const sameCharRepeated = rawAnswers.some((a) => a.length >= 4 && new Set(a.replace(/\s/g, '').split('')).size <= 2);
+
+    if (allPlaceholderOrEmpty || veryShortOrEmpty || looksLikeGibberish || sameCharRepeated) {
+      return {
+        outcome: `The candidate completed the voice interview but did not provide substantive answers to the questions (answers were empty, minimal, or non-meaningful). Recruiters should review the full Q&A transcript below and follow up with the candidate if needed. No assessment of skills or fit can be made from this session.`,
+      };
+    }
+
+    const qaList = questions
+      .map((q, i) => `Question ${i + 1}: ${q}\nCandidate answer: "${(answers[i] ?? '(No answer)').trim()}"`)
+      .join('\n\n');
+    const demeanorNote = expressionSummary
+      ? `\nDemeanor/expression (from video): ${expressionSummary}\n`
+      : '';
+    const prompt = `You are evaluating a job interview. Your job is to generate an HONEST, EVIDENCE-BASED report for recruiters.
+
+Job role: ${jobTitle}
+
+Interview Q&A (exact transcript):
+${qaList.substring(0, 4500)}
+${demeanorNote}
+
+## Strict rules
+- Every claim you make MUST be backed by a direct quote or specific example from the candidate's actual answers.
+- If the candidate gave short, vague, or irrelevant answers — say so explicitly. Do NOT soften it.
+- If the candidate typed gibberish or non-answers — mark that as "No valid response provided" or "Weak — non-meaningful answer."
+- NEVER infer enthusiasm, communication skills, or culture fit from greetings or small talk alone. Only from substantive answers.
+- Do NOT give benefit of the doubt. Only report what actually happened.
+- If there is no evidence for a positive trait → omit it entirely. Do not guess.
+
+## Required report format
+Generate the "outcome" field as a single text block. Put the recruiter summary FIRST so recruiters see it at a glance. Structure:
+
+---
+
+**SUMMARY (for recruiters) — put this at the very beginning**
+- **Fit for role:** Is this candidate a good fit for the ${jobTitle} role? (Recommend: Strong fit / Potential fit / Weak fit / Not recommend — and one sentence why.)
+- **Interview quality:** How did the interview go overall? (e.g. clear answers, engaged, technical depth, or vague, short, technical gaps.)
+- **Key takeaways:** 2–4 bullet points for the recruiter: strengths or concerns based only on evidence from the transcript. No generic praise without evidence.
+
+---
+
+Then add:
+
+1) **Per question** (for each interview question, not greeting/setup):
+   - Question asked
+   - Candidate's actual response (quote briefly)
+   - Assessment: [Strong / Acceptable / Weak / No Answer] and one line why
+
+2) **Overall:** Overall assessment (Poor / Below expectations / Meets expectations / Strong) based on answers. No positive traits unless clearly evidenced.
+
+3) **Red flags** (if any): "⚠️ Candidate did not provide a meaningful response to question N" for gibberish or non-answers.
+
+Return ONLY valid JSON: { "outcome": "Your full report text here, with SUMMARY first, then per-question and overall." }`;
+
+    try {
+      const response = await this.callQwen(prompt, true);
+      const raw = (response || '').trim();
+      let outcome: string = '';
+      try {
+        const parsed = JSON.parse(raw);
+        outcome = typeof parsed?.outcome === 'string' ? parsed.outcome.trim() : '';
+      } catch {
+        if (raw.length > 80) outcome = raw.substring(0, 4000).trim();
+      }
+      if (outcome) return { outcome };
+      return { outcome: 'Interview completed. Review the Q&A transcript for details.' };
+    } catch (err) {
+      console.error('[Qwen] generateVoiceInterviewOutcome error:', err);
+      return { outcome: 'Interview completed. Review the Q&A transcript for details.' };
+    }
+  }
+
+  // ============================================================
+  //  PHASE 7 — AI INTERVIEW CONDUCTOR (State Machine)
+  //  Your code controls phase transitions; LLM only speaks for the current phase.
+  // ============================================================
+
+  /**
+   * Pre-generate a simple list of interview questions for the state-machine conductor.
+   * Call once when creating the interview; pass the result into InterviewState.questions.
+   * If preferredLanguage is set and not English, questions are generated in that language.
+   */
+  async generateConductorQuestions(params: {
+    jobTitle: string;
+    jobDescription: string;
+    jobSkills: string[];
+    candidateContext?: string;
+    count?: number;
+    preferredLanguage?: string;
+  }): Promise<string[]> {
+    const { jobTitle, jobDescription, jobSkills, candidateContext, count = 5, preferredLanguage } = params;
+    const langCode = (preferredLanguage || 'en').split('-')[0];
+    const languageName = QwenService.LANGUAGE_NAMES[langCode] || 'English';
+    const languageRule =
+      langCode !== 'en'
+        ? `\nCRITICAL: Write every question entirely in ${languageName}. Use the correct script (e.g. Arabic script for Arabic). No English. Output only the questions, one per line.\n`
+        : '';
+    const prompt = `You are preparing interview questions for a job interview.${languageRule}
+
+Job title: ${jobTitle}
+Job description (excerpt): ${(jobDescription || '').substring(0, 1500)}
+Key skills: ${(jobSkills || []).join(', ')}
+Candidate resume (excerpt): ${(candidateContext || 'Not provided').substring(0, 800)}
+
+Generate exactly ${count} interview questions for this role. Mix of behavioral and role-specific/technical. One question per line. No numbering. No preamble — output only the questions, one per line.`;
+
+    const response = await this.callQwen(prompt, false);
+    const lines = (response || '')
+      .split(/\n+/)
+      .map((s) => s.replace(/^\d+[.)]\s*/, '').trim())
+      .filter((s) => s.length > 10);
+    return lines.slice(0, count);
+  }
+
+  /**
+   * Call this ONCE when the interview starts (before any user message).
+   * Returns the opening greeting and initial state.
+   */
+  async startInterview(state: InterviewState): Promise<{ response: string; updatedState: InterviewState }> {
+    const systemPrompt = this.buildPhasePrompt(state);
+    const langCode = (state.preferredLanguage || 'en').split('-')[0];
+    const languageName = QwenService.LANGUAGE_NAMES[langCode] || 'English';
+    const openingPrompt = langCode !== 'en'
+      ? `Start the interview now. Greet ${state.candidateName} warmly. Reply entirely in ${languageName} — every word must be in ${languageName}, no English.`
+      : `Start the interview now. Greet ${state.candidateName} warmly.`;
+    const respondInLanguage = langCode !== 'en' ? languageName : undefined;
+    const response = await this.callQwenWithHistory(
+      systemPrompt,
+      [{ role: 'user', content: openingPrompt }],
+      respondInLanguage
+    );
+    return {
+      response: response.trim(),
+      updatedState: {
+        ...state,
+        conversationHistory: [
+          { role: 'user', content: openingPrompt },
+          { role: 'assistant', content: response.trim() },
+        ],
+      },
+    };
+  }
+
+  /**
+   * Core method: given the current state + candidate's message,
+   * returns the AI's next response + updated state. Call this on EVERY user message.
+   */
+  async conductInterview(
+    state: InterviewState,
+    userMessage: string
+  ): Promise<{ response: string; updatedState: InterviewState }> {
+    const history: { role: 'user' | 'assistant'; content: string }[] = [
+      ...state.conversationHistory,
+      { role: 'user', content: userMessage },
+    ];
+
+    const nextPhase = this.transitionPhase(state, userMessage);
+    const systemPrompt = this.buildPhasePrompt({ ...state, phase: nextPhase });
+    const langCode = (state.preferredLanguage || 'en').split('-')[0];
+    const languageName = QwenService.LANGUAGE_NAMES[langCode] || 'English';
+    const respondInLanguage = langCode !== 'en' ? languageName : undefined;
+    const response = await this.callQwenWithHistory(systemPrompt, history, respondInLanguage);
+
+    const updatedHistory: { role: 'user' | 'assistant'; content: string }[] = [
+      ...history,
+      { role: 'assistant', content: response.trim() },
+    ];
+
+    const updatedQuestionIndex =
+      nextPhase === 'interview' && state.phase === 'interview'
+        ? state.questionIndex + 1
+        : state.questionIndex;
+
+    return {
+      response: response.trim(),
+      updatedState: {
+        ...state,
+        phase: nextPhase,
+        questionIndex: updatedQuestionIndex,
+        smallTalkTurns:
+          nextPhase === 'small_talk' ? state.smallTalkTurns + 1 : state.smallTalkTurns,
+        conversationHistory: updatedHistory,
+      },
+    };
+  }
+
+  /**
+   * Calls Qwen with system prompt + full conversation history. Returns plain text (no JSON).
+   * When respondInLanguage is set (e.g. "Arabic"), appends a user message so the model's next reply is in that language.
+   */
+  private async callQwenWithHistory(
+    systemPrompt: string,
+    history: { role: 'user' | 'assistant'; content: string }[],
+    respondInLanguage?: string
+  ): Promise<string> {
+    const messages = [...history];
+    if (respondInLanguage) {
+      messages.push({
+        role: 'user',
+        content: `[Instruction: Your next reply must be written entirely in ${respondInLanguage}. Use only ${respondInLanguage} — no English or other languages. Write your response now.]`,
+      });
+    }
+    const content = await this.callQwenWithMessages(systemPrompt, messages, false);
+    return typeof content === 'string' ? content.trim() : String(content).trim();
+  }
+
+  /**
+   * YOUR CODE decides phase transitions — NOT the LLM.
+   */
+  private transitionPhase(state: InterviewState, userMessage: string): InterviewPhase {
+    const msg = userMessage.toLowerCase().trim();
+
+    switch (state.phase) {
+      case 'greeting':
+        return 'small_talk';
+
+      case 'small_talk':
+        return state.smallTalkTurns >= 1 ? 'context_setting' : 'small_talk';
+
+      case 'context_setting':
+        return 'ready_check';
+
+      case 'ready_check':
+        return this.candidateIsReady(msg) ? 'interview' : 'ready_check';
+
+      case 'interview':
+        return state.questionIndex >= state.questions.length - 1 ? 'closing' : 'interview';
+
+      case 'closing':
+        return 'closing';
+
+      default:
+        return state.phase;
+    }
+  }
+
+  private candidateIsReady(message: string): boolean {
+    const readyPhrases = [
+      'yes', 'yep', 'yeah', 'yup', 'sure', 'ready',
+      "let's go", 'lets go', 'go ahead', 'okay', 'ok',
+      'sounds good', 'absolutely', 'of course', 'definitely',
+      "i'm ready", 'im ready', 'start', 'begin', 'proceed',
+    ];
+    return readyPhrases.some((phrase) => message.includes(phrase));
+  }
+
+  /**
+   * Each phase gets its own focused prompt. LLM only does ONE thing per phase.
+   */
+  private static readonly LANGUAGE_NAMES: Record<string, string> = {
+    en: 'English', es: 'Spanish', fr: 'French', de: 'German', hi: 'Hindi',
+    pt: 'Portuguese', ar: 'Arabic', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
+  };
+
+  private buildPhasePrompt(state: InterviewState): string {
+    const name = state.candidateName;
+    const role = state.jobTitle;
+    const interviewer = state.interviewerName || 'Aria';
+    const currentQuestion = state.questions[state.questionIndex] || '';
+    const questionNum = state.questionIndex + 1;
+    const totalQuestions = Math.max(1, state.questions.length);
+    const langCode = (state.preferredLanguage || 'en').split('-')[0];
+    const languageName = QwenService.LANGUAGE_NAMES[langCode] || 'English';
+    const isNonEnglish = langCode !== 'en';
+    const languageInstruction = isNonEnglish
+      ? `FIRST AND MOST IMPORTANT: You are conducting this interview in ${languageName} only. Every word you output must be in ${languageName}. Do NOT use English. Translate any English question text into ${languageName} when you ask it. Use the correct script (e.g. Arabic script for Arabic, not Latin letters).\n\n`
+      : '';
+
+    const basePersonality = `${languageInstruction}You are ${interviewer}, a professional interviewer at a company. Your tone is formal but warm: courteous, polished, and approachable.
+Speak like a real recruiter on a video call — natural and clear, but keep language professional (avoid slang or overly casual phrases).
+Never sound robotic, never use bullet points in speech, never list things formally.
+The candidate's name is ${name}. Use their name occasionally, not every sentence.
+Output ONLY what you say as the interviewer — no labels, no JSON, no "Assistant:". Just the spoken line, entirely in ${languageName}.`.trim();
+
+    switch (state.phase) {
+      case 'greeting':
+        return `${basePersonality}
+
+The candidate just joined the interview call. This is the very first thing you say.
+Greet them warmly by name. Introduce yourself (your name is ${interviewer}).
+Keep it professional but warm: ask how they're doing today or if they had any trouble joining — interview-appropriate only.
+Do NOT ask about weekend plans, vacation, or personal life. Do NOT mention the interview questions yet.
+Keep it to 2-3 natural sentences. Sound like you're happy they joined.`;
+
+      case 'small_talk':
+        return `${basePersonality}
+
+You are in brief, professional small talk before the interview begins.
+Respond naturally to what the candidate just said. Keep the tone warm and friendly but FORMAL and interview-appropriate.
+Allowed: how their day is going, if they found the link okay, if they're ready to dive in, or a brief professional remark.
+Do NOT ask about: weekend plans, vacation, hobbies, or any casual/personal topics. This is a job interview.
+Max 2-3 sentences. Then move on — do NOT linger on small talk. Do NOT transition to the interview format yet.`;
+
+      case 'context_setting':
+        return `${basePersonality}
+
+Now briefly explain how today's interview will go.
+Tell them: it'll take about 20-30 minutes, you'll ask ${totalQuestions} questions
+covering technical and behavioral topics for the ${role} role,
+they can ask for clarification anytime, and there's no pressure — just a conversation.
+Sound natural, like you're chatting — NOT reading from a script.
+Keep it to 3-4 sentences max.`;
+
+      case 'ready_check':
+        return `${basePersonality}
+
+You just explained the interview format.
+Now ask ${name} if they're ready to begin, or if they have any questions first.
+Keep it casual — one simple sentence. Wait for their go-ahead.
+If they ask a question, answer it naturally and then ask again if they're ready.`;
+
+      case 'interview':
+        return `${basePersonality}
+
+The interview is now underway. You are on question ${questionNum} of ${totalQuestions}.
+
+${questionNum === 1
+          ? `This is the first question. Transition naturally from "let's begin" into asking it.`
+          : `The candidate just answered the previous question. Briefly acknowledge their answer in 1 sentence (vary your acknowledgements — don't always say "great answer"). Then naturally transition into the next question.`}
+
+Ask ONLY this question now:
+"${currentQuestion}"
+
+Do not ask multiple questions at once. Do not explain why you're asking.
+Sound conversational, not like reading from a list.`;
+
+      case 'closing':
+        return `${basePersonality}
+
+All interview questions are done. Wrap up the interview warmly.
+Thank ${name} for their time. Tell them the team will review and be in touch.
+Ask if they have any questions for you before wrapping up.
+Sound genuine and encouraging — leave them feeling good about the experience.
+Keep it to 3-4 sentences.`;
+
+      default:
+        return basePersonality;
+    }
   }
 
   /**

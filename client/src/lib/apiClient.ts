@@ -65,6 +65,25 @@ export async function apiPost<T = any>(endpoint: string, data?: any): Promise<T>
   });
 }
 
+/** POST with JSON body; returns response as Blob (e.g. for TTS audio). */
+export async function apiPostBlob(endpoint: string, data: Record<string, unknown>): Promise<Blob> {
+  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
+  const token = getAuthToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: response.statusText }));
+    throw new Error((error as { message?: string }).message || `HTTP ${response.status}`);
+  }
+  return response.blob();
+}
+
 // PUT request
 export async function apiPut<T = any>(endpoint: string, data?: any): Promise<T> {
   return apiRequest<T>(endpoint, {

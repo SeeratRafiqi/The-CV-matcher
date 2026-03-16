@@ -4,10 +4,21 @@ import { Link, useRoute } from 'wouter';
 import {
   getInterviewAssessment,
   getInterviewAssessmentReport,
+  getVoiceInterviewForApplication,
   saveInterviewAnswer,
   startInterviewAssessment,
   submitInterviewAssessment,
 } from '@/api';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,7 +27,7 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
 import { formatDateTime } from '@/utils/helpers';
-import { AlertTriangle, ArrowLeft, CheckCircle2, Clock, Send, Timer } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, Clock, Mic, Send, Timer } from 'lucide-react';
 import type { InterviewAssessment, InterviewAssessmentReport, InterviewAssessmentStatus } from '@/types';
 
 const statusVariant: Record<InterviewAssessmentStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
@@ -50,6 +61,7 @@ export default function CandidateInterviewAssessment() {
   const [answers, setAnswers] = useState<Record<string, string | null>>({});
   const [remainingSeconds, setRemainingSeconds] = useState<number>(0);
   const [activeQuestion, setActiveQuestion] = useState(0);
+  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const autoSubmitTriggered = useRef(false);
 
   const assessmentQuery = useQuery({
@@ -100,6 +112,8 @@ export default function CandidateInterviewAssessment() {
       queryClient.invalidateQueries({ queryKey: ['candidate-interview', assessmentId] });
       queryClient.invalidateQueries({ queryKey: ['candidate-interviews'] });
       queryClient.invalidateQueries({ queryKey: ['candidate-interview-report', assessmentId] });
+      queryClient.invalidateQueries({ queryKey: ['candidate-voice-interviews'] });
+      queryClient.invalidateQueries({ queryKey: ['voice-interview-for-application'] });
       toast({ title: 'Assessment submitted', description: 'Your report is ready.' });
     },
     onError: (error: any) => {
@@ -124,7 +138,15 @@ export default function CandidateInterviewAssessment() {
     enabled: !!assessmentId && assessment?.status === 'submitted',
   });
 
+  const voiceForAppQuery = useQuery({
+    queryKey: ['voice-interview-for-application', assessment?.applicationId],
+    queryFn: () => getVoiceInterviewForApplication(assessment!.applicationId),
+    enabled: !!assessment?.applicationId && assessment?.status === 'submitted',
+    staleTime: 0,
+  });
+
   const report: InterviewAssessmentReport | undefined = reportQuery.data?.report;
+  const voiceSession = voiceForAppQuery.data?.session ?? null;
 
   const answeredCount = useMemo(
     () => Object.values(answers).filter((value) => !!value).length,
@@ -260,18 +282,36 @@ export default function CandidateInterviewAssessment() {
                   Next
                 </Button>
                 <Button
-                  onClick={() => {
-                    const confirmed = window.confirm(
-                      'Are you sure you want to submit your assessment? You cannot change your answers after submitting.'
-                    );
-                    if (confirmed) submitMutation.mutate(false);
-                  }}
+                  onClick={() => setShowSubmitConfirm(true)}
                   disabled={submitMutation.isPending}
                   className="gap-2"
                 >
                   <Send className="w-4 h-4" />
                   Submit
                 </Button>
+                <AlertDialog open={showSubmitConfirm} onOpenChange={setShowSubmitConfirm}>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Submit assessment?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Are you sure you want to submit your assessment? You cannot change your answers after submitting.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={() => {
+                          submitMutation.mutate(false);
+                          setShowSubmitConfirm(false);
+                        }}
+                        disabled={submitMutation.isPending}
+                        className="gap-2"
+                      >
+                        {submitMutation.isPending ? 'Submitting…' : 'Submit'}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </div>
             </div>
           </CardContent>
@@ -334,6 +374,49 @@ export default function CandidateInterviewAssessment() {
               </>
             )}
           </CardContent>
+        </Card>
+      )}
+
+      {assessment?.status === 'submitted' && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Mic className="w-5 h-5" />
+              Voice Interview
+            </CardTitle>
+            <CardDescription>
+              {voiceForAppQuery.isLoading
+                ? 'Checking for voice interview…'
+                : voiceSession
+                  ? voiceSession.status === 'completed'
+                    ? 'You completed the voice interview. View your report below.'
+                    : voiceSession.status === 'expired'
+                      ? 'This voice interview has expired.'
+                      : 'Continue to your voice interview for this role.'
+                  : 'No voice interview assigned for this application yet.'}
+            </CardDescription>
+          </CardHeader>
+          {voiceSession && voiceSession.status !== 'expired' && (
+            <CardContent>
+              <div className="flex flex-wrap gap-3">
+                {(voiceSession.status === 'assigned' || voiceSession.status === 'in_progress') && (
+                  <Link href={`/candidate/voice-interviews/${voiceSession.id}`}>
+                    <Button className="gap-2">
+                      <Mic className="w-4 h-4" />
+                      {voiceSession.status === 'in_progress' ? 'Continue voice interview' : 'Start voice interview'}
+                    </Button>
+                  </Link>
+                )}
+                {voiceSession.status === 'completed' && (
+                  <Link href={`/candidate/voice-interviews/${voiceSession.id}/report`}>
+                    <Button variant="outline" className="gap-2">
+                      View voice interview report
+                    </Button>
+                  </Link>
+                )}
+              </div>
+            </CardContent>
+          )}
         </Card>
       )}
     </div>

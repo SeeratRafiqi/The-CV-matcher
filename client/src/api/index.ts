@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiUpload, setAuthToken, API_BASE_URL } from '@/lib/apiClient';
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiUpload, apiPostBlob, setAuthToken, API_BASE_URL } from '@/lib/apiClient';
 import type {
   Candidate,
   CandidateProfile,
@@ -34,6 +34,10 @@ import type {
   SavedCoverLetter,
   InterviewAssessment,
   InterviewAssessmentReport,
+  VoiceInterviewSessionSummary,
+  VoiceInterviewSessionDetail,
+  VoiceInterviewForApplication,
+  VoiceInterviewReport,
 } from '@/types';
 
 // ==================== AUTH ====================
@@ -502,6 +506,91 @@ export async function getInterviewAssessmentsForApplication(applicationId: strin
   return apiGet<{ assessments: InterviewAssessment[] }>(`/interviews/application/${applicationId}`);
 }
 
+// ==================== VOICE INTERVIEWS ====================
+export async function getMyVoiceInterviewSessions(): Promise<{ sessions: VoiceInterviewSessionSummary[] }> {
+  return apiGet<{ sessions: VoiceInterviewSessionSummary[] }>('/voice-interviews/mine');
+}
+
+/** Create a test voice interview session (no job/apply/assign flow). For testing only. */
+export async function createTestVoiceInterviewSession(): Promise<{
+  message: string;
+  sessionId: string;
+  url: string;
+}> {
+  return apiPost<{ message: string; sessionId: string; url: string }>('/voice-interviews/create-test-session', {});
+}
+
+export async function getVoiceInterviewSession(id: string): Promise<{ session: VoiceInterviewSessionDetail }> {
+  return apiGet<{ session: VoiceInterviewSessionDetail }>(`/voice-interviews/session/${id}`);
+}
+
+export async function getVoiceInterviewForApplication(applicationId: string): Promise<{
+  session: VoiceInterviewForApplication | null;
+}> {
+  return apiGet<{ session: VoiceInterviewForApplication | null }>(
+    `/voice-interviews/for-application/${applicationId}`
+  );
+}
+
+export async function getVoiceInterviewReport(id: string): Promise<{ report: VoiceInterviewReport }> {
+  return apiGet<{ report: VoiceInterviewReport }>(`/voice-interviews/session/${id}/report`);
+}
+
+/** Company/recruiter: get voice interview report for an application. */
+export async function getVoiceInterviewReportForApplication(
+  applicationId: string
+): Promise<{ report: VoiceInterviewReport }> {
+  return apiGet<{ report: VoiceInterviewReport }>(`/voice-interviews/application/${applicationId}/report`);
+}
+
+export async function startVoiceInterview(
+  id: string,
+  options?: { preferredLanguage?: string }
+): Promise<{
+  session: { id: string; status: string; currentQuestionIndex: number; maxQuestions: number; currentQuestion: string; preferredLanguage?: string };
+}> {
+  return apiPost<{
+    session: { id: string; status: string; currentQuestionIndex: number; maxQuestions: number; currentQuestion: string; preferredLanguage?: string };
+  }>(`/voice-interviews/session/${id}/start`, options ? { preferredLanguage: options.preferredLanguage } : {});
+}
+
+export async function submitVoiceInterviewAnswer(
+  id: string,
+  answerText: string,
+  options?: { expressionSummary?: string | null }
+): Promise<
+  | { done: true; message: string; session: { id: string; status: string } }
+  | { done: false; session: { id: string; currentQuestionIndex: number; maxQuestions: number; currentQuestion: string } }
+> {
+  return apiPost<any>(`/voice-interviews/session/${id}/answer`, {
+    answerText,
+    expressionSummary: options?.expressionSummary ?? undefined,
+  });
+}
+
+export async function assignVoiceInterview(
+  applicationId: string,
+  options?: { durationMinutes?: number }
+): Promise<{
+  message: string;
+  session: { id: string; applicationId: string; jobId: string; status: string; maxQuestions: number; expiresAt: string };
+}> {
+  return apiPost<{
+    message: string;
+    session: { id: string; applicationId: string; jobId: string; status: string; maxQuestions: number; expiresAt: string };
+  }>('/voice-interviews/assign', { applicationId, durationMinutes: options?.durationMinutes });
+}
+
+/** Whether Alibaba TTS is available (same key as Qwen). */
+export async function getVoiceInterviewSpeechConfig(): Promise<{ useAlibabaTTS: boolean }> {
+  return apiGet<{ useAlibabaTTS: boolean }>('/voice-interviews/speech-config');
+}
+
+/** Alibaba TTS: synthesize text to speech; returns audio blob (WAV). */
+export async function synthesizeVoiceInterviewTTS(text: string, languageCode: string): Promise<Blob> {
+  return apiPostBlob('/voice-interviews/tts', { text, languageCode });
+}
+
 // ==================== COMPANY JOB MANAGEMENT ====================
 export async function getCompanyJobs(status?: string): Promise<Job[]> {
   const params = new URLSearchParams();
@@ -512,6 +601,41 @@ export async function getCompanyJobs(status?: string): Promise<Job[]> {
 
 export async function getCompanyJob(id: string): Promise<Job> {
   return apiGet<Job>(`/company/jobs/${id}`);
+}
+
+/** Enriched matches for company job: includes appliedTo, bestFit, otherStrongFits per candidate. */
+export async function getEnrichedMatchesForJob(jobId: string): Promise<EnrichedMatchResult[]> {
+  return apiGet<EnrichedMatchResult[]>(`/company/jobs/${jobId}/matches`);
+}
+
+export interface EnrichedMatchResult {
+  id: string;
+  candidateId: string;
+  jobId: string;
+  score: number;
+  breakdown?: any;
+  explanation?: string;
+  gaps?: any;
+  status?: string;
+  appliedTo: { jobId: string; jobTitle: string } | null;
+  bestFit: { jobId: string; jobTitle: string; score: number } | null;
+  otherStrongFits: { jobId: string; jobTitle: string; score: number }[];
+  candidate?: any;
+}
+
+export async function canSendRoleSuggestion(candidateUserId: string): Promise<{ allowed: boolean; lastSentAt?: string }> {
+  return apiGet<{ allowed: boolean; lastSentAt?: string }>(`/company/can-send-role-suggestion?candidateUserId=${encodeURIComponent(candidateUserId)}`);
+}
+
+export async function sendRoleSuggestion(data: {
+  candidateUserId: string;
+  jobId: string;
+  suggestedJobId?: string;
+  suggestedJobTitle?: string;
+  templateType: 'better_fit' | 'both_roles';
+  message?: string;
+}): Promise<{ conversationId: string; sent: boolean }> {
+  return apiPost<{ conversationId: string; sent: boolean }>('/company/send-role-suggestion', data);
 }
 
 export async function createCompanyJob(jobData: {

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import express from 'express';
 import { jobController } from '../controllers/jobController.js';
+import { matchController } from '../controllers/matchController.js';
 import { upload } from '../middleware/upload.js';
 import { authenticateToken, requireCompany, requireAnyRole } from '../middleware/auth.js';
 
@@ -36,6 +37,7 @@ companyJobRouter.use(authenticateToken, requireCompany);
 companyJobRouter.get('/', (req, res) => jobController.listMyJobs(req, res));
 companyJobRouter.post('/', (req, res) => jobController.createCompanyJob(req, res));
 companyJobRouter.post('/from-url', (req, res) => jobController.createCompanyJobFromUrl(req as any, res));
+companyJobRouter.get('/:id/matches', (req, res) => matchController.getEnrichedMatchesForCompanyJob(req as any, res));
 companyJobRouter.get('/:id', (req, res) => jobController.getCompanyJob(req, res));
 companyJobRouter.put('/:id', (req, res) => jobController.updateCompanyJob(req, res));
 companyJobRouter.delete('/:id', (req, res) => jobController.deleteCompanyJob(req, res));

@@ -9,6 +9,7 @@ import {
   Application,
   Candidate,
   CompanyProfile,
+  Notification,
 } from '../db/models/index.js';
 import { BaseController } from '../db/base/BaseController.js';
 import type { AuthRequest } from '../middleware/auth.js';
@@ -428,6 +429,134 @@ export class ConversationController extends BaseController {
       }
 
       return { id: conversation.id, isNew: true };
+    });
+  }
+
+  /** Throttle: at most one role suggestion per candidate per company per 7 days. */
+  async canSendRoleSuggestion(req: AuthRequest, res: Response) {
+    await this.handleRequest(req, res, async () => {
+      if (!req.user) throw Object.assign(new Error('Authentication required'), { status: 401 });
+      const candidateUserId = (req.query as any).candidateUserId;
+      if (!candidateUserId) return { allowed: true, lastSentAt: null };
+
+      const recent = await Notification.findOne({
+        where: {
+          user_id: candidateUserId,
+          type: 'role_suggestion' as any,
+          created_at: { [Op.gte]: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+        },
+        order: [['created_at', 'DESC']],
+        attributes: ['created_at'],
+      });
+      if (recent) return { allowed: false, lastSentAt: (recent as any).created_at };
+      return { allowed: true, lastSentAt: null };
+    });
+  }
+
+  async sendRoleSuggestion(req: AuthRequest, res: Response) {
+    await this.handleRequest(req, res, async () => {
+      if (!req.user) throw Object.assign(new Error('Authentication required'), { status: 401 });
+
+      const { candidateUserId, jobId, suggestedJobId, suggestedJobTitle, templateType, message: messageOverride } = req.body;
+      if (!candidateUserId || !jobId) throw Object.assign(new Error('candidateUserId and jobId are required'), { status: 400 });
+
+      const company = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
+      if (!company) throw Object.assign(new Error('Company profile not found'), { status: 404 });
+
+      const job = await Job.findByPk(jobId, { attributes: ['id', 'title', 'company_id'] });
+      if (!job || (job as any).company_id !== company.id) throw Object.assign(new Error('Job not found'), { status: 404 });
+
+      const suggestedJob = suggestedJobId ? await Job.findByPk(suggestedJobId, { attributes: ['id', 'title', 'company_id'] }) : null;
+      if (suggestedJobId && (!suggestedJob || (suggestedJob as any).company_id !== company.id)) {
+        throw Object.assign(new Error('Suggested job not found'), { status: 404 });
+      }
+
+      const candidate = await Candidate.findOne({ where: { user_id: candidateUserId }, attributes: ['id', 'name'] });
+      const candidateName = candidate?.name || 'there';
+      const companyName = (company as any).company_name || 'The team';
+      const currentJobTitle = (job as any).title || 'this role';
+      const suggestedTitle = suggestedJobTitle || (suggestedJob as any)?.title || 'our other role';
+
+      const ROLE_SUGGESTION_THROTTLE_DAYS = 7;
+      const recent = await Notification.findOne({
+        where: {
+          user_id: candidateUserId,
+          type: 'role_suggestion' as any,
+          created_at: { [Op.gte]: new Date(Date.now() - ROLE_SUGGESTION_THROTTLE_DAYS * 24 * 60 * 60 * 1000) },
+        },
+      });
+      if (recent) {
+        throw Object.assign(new Error(`A role suggestion was already sent to this candidate in the last ${ROLE_SUGGESTION_THROTTLE_DAYS} days.`), { status: 429 });
+      }
+
+      const templates: Record<string, string> = {
+        better_fit: `Hi ${candidateName}, we noticed your profile is a strong fit for our ${suggestedTitle} role. Would you be open to us considering you for that position as well? Best, ${companyName}`,
+        both_roles: `Hi ${candidateName}, your background fits well with both our ${currentJobTitle} and ${suggestedTitle} openings. You applied for ${currentJobTitle}; we're happy to consider you for either. Would you like to be considered for both, or keep your application to ${currentJobTitle} only? Best, ${companyName}`,
+      };
+      const message = (messageOverride && String(messageOverride).trim()) || (templateType && templates[templateType]) || templates.better_fit;
+
+      const recipientId = candidateUserId;
+      if (recipientId === req.user.id) throw Object.assign(new Error('Cannot message yourself'), { status: 400 });
+
+      const targetUser = await User.findByPk(recipientId);
+      if (!targetUser) throw Object.assign(new Error('Candidate user not found'), { status: 404 });
+
+      const userId = req.user.id;
+      let p1 = userId;
+      let p2 = recipientId;
+      if (req.user.role === 'candidate') {
+        p1 = recipientId;
+        p2 = userId;
+      }
+
+      const existing = await Conversation.findOne({
+        where: {
+          [Op.or]: [
+            { participant_1_id: p1, participant_2_id: p2 },
+            { participant_1_id: p2, participant_2_id: p1 },
+          ],
+          ...(jobId ? { job_id: jobId } : { job_id: null }),
+        },
+      });
+
+      let conversationId: string;
+      if (existing) {
+        await Message.create({
+          id: randomUUID(),
+          conversation_id: existing.id,
+          sender_id: userId,
+          content: message,
+          read: false,
+        });
+        await existing.update({ last_message_at: new Date() });
+        conversationId = existing.id;
+      } else {
+        const conversation = await Conversation.create({
+          id: randomUUID(),
+          participant_1_id: p1,
+          participant_2_id: p2,
+          job_id: jobId || null,
+          last_message_at: new Date(),
+        });
+        await Message.create({
+          id: randomUUID(),
+          conversation_id: conversation.id,
+          sender_id: userId,
+          content: message,
+          read: false,
+        });
+        conversationId = conversation.id;
+      }
+
+      await notificationService.create({
+        userId: recipientId,
+        type: 'role_suggestion' as any,
+        title: 'Role suggestion',
+        body: message.substring(0, 120) + (message.length > 120 ? '...' : ''),
+        data: { conversationId, jobId, suggestedJobId, candidateUserId },
+      });
+
+      return { conversationId, sent: true };
     });
   }
 

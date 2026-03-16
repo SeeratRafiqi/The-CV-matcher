@@ -91,6 +91,97 @@ export function improvedBulletsToPdfBlob(
   return doc.output('blob');
 }
 
+export interface VoiceInterviewReportForPdf {
+  jobTitle: string;
+  completedAt: string | null;
+  outcome: string | null;
+  qa: { question: string; answer: string; answeredAt: string | null }[];
+}
+
+/**
+ * Build a PDF for the voice interview report (recruiter download).
+ */
+export function voiceInterviewReportToPdfBlob(report: VoiceInterviewReportForPdf, candidateName?: string): Blob {
+  const doc = new jsPDF({ format: 'a4', unit: 'mm' });
+  let y = MARGIN;
+
+  doc.setFontSize(16);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Voice Interview Report', MARGIN, y);
+  y += LINE_HEIGHT * 1.2;
+
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Role: ${report.jobTitle || '—'}`, MARGIN, y);
+  y += LINE_HEIGHT;
+  if (candidateName) {
+    doc.text(`Candidate: ${candidateName}`, MARGIN, y);
+    y += LINE_HEIGHT;
+  }
+  if (report.completedAt) {
+    doc.text(`Completed: ${report.completedAt}`, MARGIN, y);
+    y += LINE_HEIGHT;
+  }
+  y += LINE_HEIGHT * 0.5;
+
+  if (report.outcome && report.outcome.trim()) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('Summary & Analysis', MARGIN, y);
+    y += LINE_HEIGHT * 1.2;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    const outcomeLines = (report.outcome || '').trim().split(/\r?\n/);
+    for (const line of outcomeLines) {
+      if (y > PAGE_HEIGHT - MARGIN - LINE_HEIGHT) {
+        doc.addPage();
+        y = MARGIN;
+      }
+      const wrapped = doc.splitTextToSize(line || ' ', MAX_WIDTH);
+      for (const w of wrapped) {
+        doc.text(w, MARGIN, y);
+        y += LINE_HEIGHT;
+      }
+    }
+    y += LINE_HEIGHT * 0.5;
+  }
+
+  if (report.qa && report.qa.length > 0) {
+    if (y > PAGE_HEIGHT - MARGIN - LINE_HEIGHT * 4) {
+      doc.addPage();
+      y = MARGIN;
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('Q&A', MARGIN, y);
+    y += LINE_HEIGHT * 1.2;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    for (let i = 0; i < report.qa.length; i++) {
+      const item = report.qa[i];
+      if (y > PAGE_HEIGHT - MARGIN - LINE_HEIGHT * 3) {
+        doc.addPage();
+        y = MARGIN;
+      }
+      doc.setFont('helvetica', 'bold');
+      const qWrapped = doc.splitTextToSize(item.question || '—', MAX_WIDTH);
+      for (const w of qWrapped) {
+        doc.text(w, MARGIN, y);
+        y += LINE_HEIGHT;
+      }
+      doc.setFont('helvetica', 'normal');
+      const aWrapped = doc.splitTextToSize(`A: ${item.answer || '—'}`, MAX_WIDTH);
+      for (const w of aWrapped) {
+        doc.text(w, MARGIN + 3, y);
+        y += LINE_HEIGHT;
+      }
+      y += LINE_HEIGHT * 0.3;
+    }
+  }
+
+  return doc.output('blob');
+}
+
 /**
  * Convert an HTML element (e.g. populated resume template) to a PDF Blob.
  * Uses html2canvas to capture the element and jsPDF to build the document.

@@ -682,22 +682,30 @@ export default function Pipeline() {
                           Download PDF
                         </Button>
                       </CardHeader>
-                      <CardContent className="py-2">
+                      <CardContent className="py-2 space-y-4">
+                        {voiceReportData.report.qa && voiceReportData.report.qa.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Questions &amp; Answers</p>
+                            <div className="max-h-48 overflow-y-auto rounded-md bg-muted/30 p-3 border border-border/50 space-y-3 text-sm">
+                              {voiceReportData.report.qa.map((item, idx) => (
+                                <div key={idx}>
+                                  <p className="font-medium text-foreground/90">{item.question}</p>
+                                  <p className="pl-2 border-l-2 border-primary/40 text-muted-foreground">{item.answer || '(No answer)'}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         {voiceReportData.report.outcome ? (
                           <div className="space-y-2">
                             <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Summary &amp; Analysis</p>
-                            <div className="text-sm whitespace-pre-wrap rounded-md bg-muted/50 p-3 border border-border/50">
+                            <div className="max-h-52 overflow-y-auto text-sm whitespace-pre-wrap rounded-md bg-muted/50 p-3 border border-border/50">
                               {voiceReportData.report.outcome.split(/\n+/).filter((p) => p.trim()).map((para, i) => (
                                 <p key={i} className={i > 0 ? 'mt-2' : ''}>
                                   {para.trim()}
                                 </p>
                               ))}
                             </div>
-                            {voiceReportData.report.qa?.length > 0 && (
-                              <p className="text-xs text-muted-foreground pt-1">
-                                Full Q&amp;A transcript is included in the PDF download.
-                              </p>
-                            )}
                           </div>
                         ) : (
                           <p className="text-sm text-muted-foreground">

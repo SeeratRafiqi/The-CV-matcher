@@ -9,6 +9,8 @@ import {
   rerunCandidateMatching,
 } from '@/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { WavyGradientBackground } from '@/components/WavyGradientBackground';
+import { TiltCard } from '@/components/TiltCard';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -114,49 +116,80 @@ export default function CandidateDashboard() {
   const completenessPercent = Object.values(completeness).filter(Boolean).length * 25;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Welcome back, {user?.name?.split(' ')[0]}</h1>
-        <p className="text-muted-foreground">Here's your job matching overview</p>
-      </div>
-
-      {/* Profile completeness */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium">Profile Completeness</span>
-                <span className="text-sm font-bold text-primary">{completenessPercent}%</span>
+    <div className="relative z-10 space-y-8">
+      <WavyGradientBackground />
+      {/* Hero section with 3D tilt */}
+      <TiltCard maxTilt={6} className="w-full">
+        <Card className="overflow-hidden border-none bg-gradient-to-r from-muted/80 via-background to-background shadow-lg">
+          <CardContent className="p-6 sm:p-8">
+            <div className="grid gap-8 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] items-center">
+              <div className="space-y-4">
+                <p className="text-xs font-medium uppercase tracking-[0.15em] text-muted-foreground">
+                  Candidate dashboard
+                </p>
+                <h1 className="text-[28px] sm:text-[32px] font-semibold leading-tight">
+                  Welcome back, {user?.name?.split(' ')[0]}
+                </h1>
+                <p className="text-sm sm:text-base text-muted-foreground max-w-xl">
+                  Upload your CV, let AI understand your profile, and get matched to roles that actually fit you.
+                  This page gives you a quick snapshot of your profile strength and top opportunities.
+                </p>
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <Button className="gap-2">
+                    <Sparkles className="w-4 h-4" />
+                    Browse matched jobs
+                  </Button>
+                  <Link href="/candidate/cv-review">
+                    <Button variant="outline" className="gap-2">
+                      <FileText className="w-4 h-4" />
+                      AI CV review
+                    </Button>
+                  </Link>
+                </div>
               </div>
-              <div className="w-full bg-muted rounded-full h-2">
-                <div
-                  className="bg-primary h-2 rounded-full transition-all"
-                  style={{ width: `${completenessPercent}%` }}
-                />
+
+              {/* Profile completeness pill card */}
+              <div className="rounded-3xl bg-card/80 border border-border/70 px-5 py-4 space-y-4 shadow-md">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground">Profile completeness</p>
+                    <p className="text-2xl font-semibold mt-1">{completenessPercent}%</p>
+                  </div>
+                  <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 text-primary">
+                    <User className="w-6 h-6" />
+                  </div>
+                </div>
+                <div className="w-full bg-muted/60 rounded-full h-2">
+                  <div
+                    className="bg-primary h-2 rounded-full transition-all"
+                    style={{ width: `${completenessPercent}%` }}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-3 mt-1">
+                  {[
+                    { label: 'Photo', done: completeness.photo },
+                    { label: 'Headline', done: completeness.headline },
+                    { label: 'CV uploaded', done: completeness.cv },
+                    { label: 'Skills extracted', done: completeness.skills },
+                  ].map((item) => (
+                    <div
+                      key={item.label}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] border ${
+                        item.done
+                          ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-300'
+                          : 'border-border/80 text-muted-foreground'
+                      }`}
+                    >
+                      <CheckCircle className={`w-3.5 h-3.5 ${item.done ? '' : 'opacity-40'}`} />
+                      {item.label}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-          <div className="flex flex-wrap gap-3 mt-3">
-            {[
-              { label: 'Photo', done: completeness.photo },
-              { label: 'Headline', done: completeness.headline },
-              { label: 'CV uploaded', done: completeness.cv },
-              { label: 'Skills extracted', done: completeness.skills },
-            ].map((item) => (
-              <div
-                key={item.label}
-                className={`flex items-center gap-1.5 text-xs ${
-                  item.done ? 'text-emerald-600' : 'text-muted-foreground'
-                }`}
-              >
-                <CheckCircle className={`w-3.5 h-3.5 ${item.done ? '' : 'opacity-30'}`} />
-                {item.label}
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </TiltCard>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Upload CV Card */}

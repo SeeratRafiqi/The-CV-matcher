@@ -18,6 +18,7 @@ export interface VoiceInterviewSessionAttributes {
   started_at?: Date | null;
   completed_at?: Date | null;
   outcome?: string | null;
+  candidate_outcome?: string | null;
   conductor_state?: string | null;
   expires_at: Date;
   created_at?: Date;
@@ -41,6 +42,7 @@ export class VoiceInterviewSession
   declare started_at: Date | null;
   declare completed_at: Date | null;
   declare outcome: string | null;
+  declare candidate_outcome: string | null;
   declare conductor_state: string | null;
   declare expires_at: Date;
   declare created_at: Date;
@@ -101,6 +103,7 @@ VoiceInterviewSession.init(
     started_at: { type: DataTypes.DATE, allowNull: true },
     completed_at: { type: DataTypes.DATE, allowNull: true },
     outcome: { type: DataTypes.TEXT, allowNull: true },
+    candidate_outcome: { type: DataTypes.TEXT, allowNull: true },
     conductor_state: { type: DataTypes.TEXT, allowNull: true },
     expires_at: { type: DataTypes.DATE, allowNull: false },
     created_at: {

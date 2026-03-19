@@ -39,12 +39,14 @@ import {
   MessageSquare,
   Bookmark,
   BarChart3,
+  Phone,
   Shield,
   Users,
   FileSearch,
   Target,
   MessageCircleQuestion,
   Timer,
+  DollarSign,
 } from 'lucide-react';
 
 interface AppLayoutProps {
@@ -53,6 +55,8 @@ interface AppLayoutProps {
 
 const adminMenuItems = [
   { title: 'Dashboard', url: '/admin/dashboard', icon: LayoutDashboard },
+  { title: 'Usage & Cost', url: '/admin/usage', icon: DollarSign },
+  { title: 'Call Statistics', url: '/admin/call-statistics', icon: Phone },
   { title: 'CVs', url: '/admin/cvs', icon: FileText },
   { title: 'Upload CVs', url: '/admin/cvs/upload', icon: Upload },
   { title: 'Jobs', url: '/admin/jobs', icon: Briefcase },
@@ -197,7 +201,7 @@ export function AppLayout({ children }: AppLayoutProps) {
                 </div>
                 <div className="flex flex-col">
                   <span className="font-semibold text-sm text-sidebar-foreground">CV Matcher</span>
-                  <span className="text-xs text-muted-foreground">Powered by AI</span>
+                  <span className="text-xs text-sidebar-foreground/80">Powered by AI</span>
                 </div>
               </div>
             </Link>
@@ -227,14 +231,14 @@ export function AppLayout({ children }: AppLayoutProps) {
                 <p className="text-sm font-medium truncate">
                   {role === 'company' ? (user?.companyName || user?.name) : user?.name}
                 </p>
-                <p className="text-xs text-muted-foreground capitalize">{user?.role}</p>
+                <p className="text-xs text-sidebar-foreground/80 capitalize">{user?.role}</p>
               </div>
             </div>
           </SidebarFooter>
         </Sidebar>
 
         <div className="flex flex-col flex-1 min-w-0">
-          <header className="flex items-center justify-between h-14 px-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <header className="flex items-center justify-between h-14 px-4 border-b border-sidebar-border bg-header text-header-foreground shadow-header [&_button]:text-header-foreground [&_button:hover]:bg-white/10 [&_button:hover]:text-header-foreground">
             <div className="flex items-center gap-4">
               <SidebarTrigger data-testid="button-sidebar-toggle" />
             </div>

@@ -12,6 +12,7 @@ import { CandidateMatrix } from '../db/models/CandidateMatrix.js';
 import { Job } from '../db/models/Job.js';
 import { CompanyProfile } from '../db/models/CompanyProfile.js';
 import { TailoredResume } from '../db/models/TailoredResume.js';
+import { logUsage, logUsageFailure, inferErrorType } from '../services/usageService.js';
 
 /**
  * Helper: get CV text for a candidate (reads from the PDF file on disk).
@@ -121,8 +122,11 @@ export class AiController {
         // Always build revisedCvText from the uploaded CV: same content with only the suggested lines replaced
         const revisedCvText =
           bullets.length > 0 ? applyRevisedBullets(cvText, bullets) : undefined;
+        const u = (result as any)._usage;
+        logUsage(userId, 'cv_review', u ? { inputTokens: u.input_tokens, outputTokens: u.output_tokens, tokensUsed: u.total_tokens } : undefined).catch(() => {});
+        const { _usage, ...rest } = result as any;
         return res.json({
-          ...result,
+          ...rest,
           rewrittenBullets: bullets,
           revisedCvText,
         });
@@ -152,6 +156,7 @@ export class AiController {
           };
           return res.status(200).json(fallback);
         }
+        logUsageFailure(req.user!.id, 'cv_review', inferErrorType(qwenError)).catch(() => {});
         throw qwenError;
       }
     } catch (error: any) {
@@ -247,8 +252,10 @@ export class AiController {
         job.description,
         [...(job.must_have_skills || []), ...(job.nice_to_have_skills || [])]
       );
-
-      return res.json(result);
+      const u = (result as any)._usage;
+      logUsage(userId, 'tailor_resume', u ? { inputTokens: u.input_tokens, outputTokens: u.output_tokens, tokensUsed: u.total_tokens } : undefined).catch(() => {});
+      const { _usage: _u, ...rest } = result as any;
+      return res.json(rest);
     } catch (error: any) {
       console.error('[AI] CV Tailor failed:', error.message);
       return res.status(500).json({ message: error.message || 'CV tailoring failed' });
@@ -279,8 +286,10 @@ export class AiController {
         job.description || '',
         skills
       );
-
-      return res.json(result);
+      const u = (result as any)._usage;
+      logUsage(userId, 'tailor_resume', u ? { inputTokens: u.input_tokens, outputTokens: u.output_tokens, tokensUsed: u.total_tokens } : undefined).catch(() => {});
+      const { _usage: _u, ...rest } = result as any;
+      return res.json(rest);
     } catch (error: any) {
       console.error('[AI] Tailor CV reordered failed:', error.message);
       return res.status(500).json({ message: error.message || 'Tailoring failed' });
@@ -315,10 +324,16 @@ export class AiController {
 
       const tailoredCvText = (tailorResult.tailoredCvText || '').replace(/\\n/g, '\n');
       const keyChanges = tailorResult.keyChanges || [];
+      let totalInput = (tailorResult as any)._usage?.input_tokens ?? 0;
+      let totalOutput = (tailorResult as any)._usage?.output_tokens ?? 0;
 
       let structuredResume: Record<string, unknown> | null = null;
       try {
-        structuredResume = await qwenService.extractStructuredResume(tailoredCvText) as Record<string, unknown>;
+        const extracted = await qwenService.extractStructuredResume(tailoredCvText) as Record<string, unknown> & { _usage?: { input_tokens: number; output_tokens: number; total_tokens: number } };
+        totalInput += extracted._usage?.input_tokens ?? 0;
+        totalOutput += extracted._usage?.output_tokens ?? 0;
+        const { _usage: _u, ...rest } = extracted;
+        structuredResume = rest;
       } catch (_) {
         /* use raw text + fallback template when extraction fails */
       }
@@ -339,6 +354,7 @@ export class AiController {
         });
       }
 
+      logUsage(userId, 'tailor_resume', totalInput > 0 || totalOutput > 0 ? { inputTokens: totalInput, outputTokens: totalOutput, tokensUsed: totalInput + totalOutput } : undefined).catch(() => {});
       return res.json({
         tailoredCvText,
         keyChanges,
@@ -346,6 +362,7 @@ export class AiController {
         structuredResume: structuredResume ?? undefined,
       });
     } catch (error: any) {
+      if (req.user?.id) logUsageFailure(req.user.id, 'tailor_resume', inferErrorType(error)).catch(() => {});
       console.error('[AI] tailorResumeForJob failed:', error.message);
       return res.status(500).json({ message: error.message || 'Tailoring failed' });
     }

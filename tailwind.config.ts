@@ -59,6 +59,10 @@ export default {
           "4": "hsl(var(--chart-4) / <alpha-value>)",
           "5": "hsl(var(--chart-5) / <alpha-value>)",
         },
+        header: {
+          DEFAULT: "hsl(var(--header) / <alpha-value>)",
+          foreground: "hsl(var(--header-foreground) / <alpha-value>)",
+        },
         sidebar: {
           ring: "hsl(var(--sidebar-ring) / <alpha-value>)",
           DEFAULT: "hsl(var(--sidebar) / <alpha-value>)",
@@ -100,6 +104,12 @@ export default {
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+      },
+      boxShadow: {
+        "sidebar": "var(--shadow-sidebar)",
+        "header": "var(--shadow-header)",
+        "card-elevated": "var(--shadow-card-elevated)",
+        "card-strong": "var(--shadow-card-strong)",
       },
     },
   },

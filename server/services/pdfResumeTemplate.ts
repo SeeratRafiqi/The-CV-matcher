@@ -5,12 +5,12 @@ const PAGE_WIDTH = 595;
 const PAGE_HEIGHT = 842;
 const MARGIN = 50;
 const TOP_CONTENT_PADDING = 24;   // Extra space below header / top of page
-const BOTTOM_MARGIN = 60;  // Min Y before starting a new page (adds bottom padding)
+const BOTTOM_MARGIN = 45;  // Min Y before starting a new page (adds bottom padding)
 const CONTINUATION_TOP = 18;  // Extra top padding on page 2+ so content doesn't sit flush
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 const BULLET_INDENT = 14;
-const TITLE_TO_LINE_GAP = 8;               // Space between section title text and the underline
-const SECTION_TITLE_TO_CONTENT_GAP = 12;  // Space between section title underline and first line
+const TITLE_TO_LINE_GAP = 7;               // Space between section title text and the underline
+const SECTION_TITLE_TO_CONTENT_GAP = 8;  // Space between section title underline and first line
 
 // Professional template colours (Canva/Overleaf style: navy accent, clean body)
 const ACCENT: RGB = rgb(0.11, 0.27, 0.42);       // Navy blue
@@ -22,10 +22,10 @@ const FONT_SIZE_BODY = 10;
 const FONT_SIZE_SECTION = 12;
 const FONT_SIZE_HEADER_NAME = 18;
 const FONT_SIZE_HEADER_CONTACT = 9;
-const LINE_HEIGHT_BODY = 13;
+const LINE_HEIGHT_BODY = 14;
 const LINE_HEIGHT_SECTION = 16;
 const TOP_BAR_HEIGHT = 28;
-const SECTION_GAP = 10;
+const SECTION_GAP = 14;
 const ENTRY_GAP = 6;
 
 /** Min space needed for a section header so we don't orphan the title at page bottom. */
@@ -33,7 +33,7 @@ const SECTION_HEADER_MIN_HEIGHT = LINE_HEIGHT_SECTION + TITLE_TO_LINE_GAP + 4 + 
 
 /** Y position for first content line on a continuation page (page 2+). */
 function continuationY(): number {
-  return PAGE_HEIGHT - MARGIN - CONTINUATION_TOP;
+  return PAGE_HEIGHT - MARGIN - CONTINUATION_TOP - 8;
 }
 
 /** True if we need a new page before drawing another line. */
@@ -54,6 +54,20 @@ export interface StructuredResumeData {
   projects: { name: string; description?: string; bullets?: string[] }[];
   achievements?: string[];
   certifications: string[];
+}
+
+/** Strip HTML tags so PDF shows plain text only (no raw <mark> or other tags). */
+function stripHtml(text: string): string {
+  if (typeof text !== 'string') return '';
+  return text
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
 }
 
 /** Detect if a line looks like a section header (e.g. EXPERIENCE, Education, Skills). */
@@ -183,6 +197,69 @@ function drawWrappedWithPagination(
   return { page: currentPage, y: currentY };
 }
 
+/** Draw wrapped text with first line bold, continuation lines regular (so wrapped "titles" don't look like sub-titles). */
+function drawWrappedBoldFirstLine(
+  doc: PDFDocument,
+  page: PDFPage,
+  font: any,
+  fontBold: any,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  size: number,
+  color: RGB,
+  lineHeight: number
+): { page: PDFPage; y: number } {
+  const words = (text || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return { page, y };
+  let currentPage = page;
+  let currentY = y;
+  let run: string[] = [];
+  let isFirstLine = true;
+
+  const flush = (useBold: boolean) => {
+    if (run.length === 0) return;
+    if (needsNewPage(currentY, lineHeight)) {
+      currentPage = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      currentY = continuationY();
+    }
+    currentPage.drawText(run.join(' '), {
+      x,
+      y: currentY,
+      size,
+      font: useBold ? fontBold : font,
+      color,
+    });
+    currentY -= lineHeight;
+    run = [];
+  };
+
+  for (const word of words) {
+    const testRun = run.length ? [...run, word].join(' ') : word;
+    const measureFont = isFirstLine ? fontBold : font;
+    const w = measureFont.widthOfTextAtSize(testRun, size);
+    if (w <= maxWidth) {
+      run.push(word);
+    } else {
+      flush(isFirstLine);
+      isFirstLine = false;
+      if (font.widthOfTextAtSize(word, size) <= maxWidth) {
+        run = [word];
+      } else {
+        if (needsNewPage(currentY, lineHeight)) {
+          currentPage = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+          currentY = continuationY();
+        }
+        currentPage.drawText(word, { x, y: currentY, size, font, color });
+        currentY -= lineHeight;
+      }
+    }
+  }
+  flush(isFirstLine);
+  return { page: currentPage, y: currentY };
+}
+
 /** Draw a section title (navy, bold, accent line). Returns page and new y. Starts new page if not enough room to avoid orphaned headers. */
 function drawSectionTitle(
   page: PDFPage,
@@ -209,7 +286,7 @@ function drawSectionTitle(
   currentPage.drawRectangle({
     x: MARGIN,
     y: py + 2,
-    width: 36,
+    width: CONTENT_WIDTH,
     height: 2,
     color: ACCENT,
   });
@@ -237,10 +314,10 @@ export async function buildPdfFromStructuredResume(data: StructuredResumeData): 
     height: TOP_BAR_HEIGHT,
     color: ACCENT_LIGHT,
   });
-  y -= TOP_BAR_HEIGHT + 16;
+ 
 
   // Header: name (large, centered or left)
-  const name = (data.name || 'Resume').trim();
+  const name = stripHtml(data.name || 'Resume').trim() || 'Resume';
   if (name) {
     page.drawText(name, {
       x: MARGIN,
@@ -254,10 +331,10 @@ export async function buildPdfFromStructuredResume(data: StructuredResumeData): 
 
   // Contact line: email | phone | LinkedIn | portfolio
   const contactParts: string[] = [];
-  if (data.email?.trim()) contactParts.push(data.email.trim());
-  if (data.phone?.trim()) contactParts.push(data.phone.trim());
-  if (data.linkedIn?.trim()) contactParts.push(data.linkedIn.trim());
-  if (data.portfolio?.trim()) contactParts.push(data.portfolio.trim());
+  if (data.email?.trim()) contactParts.push(stripHtml(data.email).trim());
+  if (data.phone?.trim()) contactParts.push(stripHtml(data.phone).trim());
+  if (data.linkedIn?.trim()) contactParts.push(stripHtml(data.linkedIn).trim());
+  if (data.portfolio?.trim()) contactParts.push(stripHtml(data.portfolio).trim());
   const contactLine = contactParts.join('  •  ');
   if (contactLine) {
     if (needsNewPage(y, FONT_SIZE_HEADER_CONTACT + 4)) {
@@ -283,7 +360,7 @@ export async function buildPdfFromStructuredResume(data: StructuredResumeData): 
     const out = drawSectionTitle(page, fontBold, 'Professional Summary', y, doc);
     page = out.page;
     y = out.y;
-    const sumOut = drawWrappedWithPagination(doc, page, font, data.summary.trim(), MARGIN, y, maxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
+    const sumOut = drawWrappedWithPagination(doc, page, font, stripHtml(data.summary).trim(), MARGIN, y, maxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
     page = sumOut.page;
     y = sumOut.y - SECTION_GAP;
   }
@@ -293,7 +370,7 @@ export async function buildPdfFromStructuredResume(data: StructuredResumeData): 
     const out = drawSectionTitle(page, fontBold, 'Skills', y, doc);
     page = out.page;
     y = out.y;
-    const skillsText = data.skills.map((s) => s.trim()).filter(Boolean).join('  •  ');
+    const skillsText = data.skills.map((s) => stripHtml(s).trim()).filter(Boolean).join('  •  ');
     if (skillsText) {
       const skOut = drawWrappedWithPagination(doc, page, font, skillsText, MARGIN, y, maxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
       page = skOut.page;
@@ -312,19 +389,15 @@ export async function buildPdfFromStructuredResume(data: StructuredResumeData): 
         page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
         y = continuationY();
       }
-      const roleCompany = [exp.role, exp.company].filter(Boolean).join(' — ');
-      const sub = exp.dates ? `${roleCompany}  |  ${exp.dates}` : roleCompany;
-      page.drawText(sub, {
-        x: MARGIN,
-        y,
-        size: FONT_SIZE_BODY,
-        font: fontBold,
-        color: TEXT_DARK,
-      });
-      y -= LINE_HEIGHT_BODY;
+      const roleCompany = [stripHtml(exp.role), stripHtml(exp.company)].filter(Boolean).join(' — ');
+      const sub = exp.dates ? `${roleCompany}  |  ${stripHtml(exp.dates)}` : roleCompany;
+      const expTitleOut = drawWrappedBoldFirstLine(doc, page, font, fontBold, sub, MARGIN, y, maxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
+      page = expTitleOut.page;
+      y = expTitleOut.y;
       for (const bullet of exp.bullets || []) {
-        if (!bullet?.trim()) continue;
-        const bOut = drawWrappedWithPagination(doc, page, font, `• ${bullet.trim()}`, MARGIN + BULLET_INDENT, y, bulletMaxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
+        const b = stripHtml(bullet || '').trim();
+        if (!b) continue;
+        const bOut = drawWrappedWithPagination(doc, page, font, `• ${b}`, MARGIN + BULLET_INDENT, y, bulletMaxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
         page = bOut.page;
         y = bOut.y;
       }
@@ -343,23 +416,20 @@ export async function buildPdfFromStructuredResume(data: StructuredResumeData): 
         page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
         y = continuationY();
       }
-      const title = proj.name?.trim() || 'Project';
-      page.drawText(title, {
-        x: MARGIN,
-        y,
-        size: FONT_SIZE_BODY,
-        font: fontBold,
-        color: TEXT_DARK,
-      });
-      y -= LINE_HEIGHT_BODY;
-      if (proj.description?.trim()) {
-        const dOut = drawWrappedWithPagination(doc, page, font, proj.description.trim(), MARGIN + BULLET_INDENT, y, bulletMaxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
+      const title = stripHtml(proj.name || '').trim() || 'Project';
+      const projTitleOut = drawWrappedBoldFirstLine(doc, page, font, fontBold, title, MARGIN, y, maxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
+      page = projTitleOut.page;
+      y = projTitleOut.y;
+      const desc = stripHtml(proj.description || '').trim();
+      if (desc) {
+        const dOut = drawWrappedWithPagination(doc, page, font, desc, MARGIN + BULLET_INDENT, y, bulletMaxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
         page = dOut.page;
         y = dOut.y;
       }
       for (const bullet of proj.bullets || []) {
-        if (!bullet?.trim()) continue;
-        const bOut = drawWrappedWithPagination(doc, page, font, `• ${bullet.trim()}`, MARGIN + BULLET_INDENT, y, bulletMaxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
+        const b = stripHtml(bullet || '').trim();
+        if (!b) continue;
+        const bOut = drawWrappedWithPagination(doc, page, font, `• ${b}`, MARGIN + BULLET_INDENT, y, bulletMaxWidth, FONT_SIZE_BODY, TEXT_DARK, LINE_HEIGHT_BODY);
         page = bOut.page;
         y = bOut.y;
       }
@@ -378,7 +448,7 @@ export async function buildPdfFromStructuredResume(data: StructuredResumeData): 
         page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
         y = continuationY();
       }
-      const line = [edu.degree, edu.institution, edu.dates].filter(Boolean).join('  |  ');
+      const line = [stripHtml(edu.degree), stripHtml(edu.institution), stripHtml(edu.dates || '')].filter(Boolean).join('  |  ');
       page.drawText(line, {
         x: MARGIN,
         y,
@@ -392,8 +462,8 @@ export async function buildPdfFromStructuredResume(data: StructuredResumeData): 
   }
 
   // Achievements & Certifications (only if at least one has content)
-  const achievements = (data.achievements ?? []).map((a) => a.trim()).filter(Boolean);
-  const certs = (data.certifications ?? []).map((c) => c.trim()).filter(Boolean);
+  const achievements = (data.achievements ?? []).map((a) => stripHtml(a).trim()).filter(Boolean);
+  const certs = (data.certifications ?? []).map((c) => stripHtml(c).trim()).filter(Boolean);
   if (achievements.length > 0 || certs.length > 0) {
     const out = drawSectionTitle(page, fontBold, 'Achievements & Certifications', y, doc);
     page = out.page;
@@ -438,7 +508,7 @@ export async function buildPdfWithProfessionalTemplate(tailoredText: string): Pr
 
   for (const section of sections) {
     // Section title: ensure we have room so the title is not orphaned at the bottom of the page
-    const sectionTitle = section.title.replace(/:$/, '').trim();
+    const sectionTitle = stripHtml(section.title.replace(/:$/, '')).trim();
     if (needsNewPage(y, SECTION_HEADER_MIN_HEIGHT)) {
       page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
       y = continuationY();
@@ -465,7 +535,8 @@ export async function buildPdfWithProfessionalTemplate(tailoredText: string): Pr
     // Section content (word-wrap) with proper page breaks
     const maxWidth = CONTENT_WIDTH - 4;
     for (const line of section.lines) {
-      const words = line.split(/\s+/).filter(Boolean);
+      const plainLine = stripHtml(line);
+      const words = plainLine.split(/\s+/).filter(Boolean);
       let run: string[] = [];
 
       for (const word of words) {

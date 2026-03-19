@@ -3,16 +3,18 @@ import { Op, fn, col, literal } from 'sequelize';
 import sequelize from '../db/config.js';
 import {
   Application,
-  ApplicationHistory,
   Candidate,
   CompanyProfile,
   Job,
   Match,
   User,
   CandidateMatrix,
+  UsageLog,
+  TailoredResume,
 } from '../db/models/index.js';
 import { BaseController } from '../db/base/BaseController.js';
 import type { AuthRequest } from '../middleware/auth.js';
+import { FEATURE_CONFIG, getExternalApis, computeCostFromTokens, computeCostFromTtsChars, FEATURE_TO_API_ID, ALIBABA_PRICING_DOC_URL } from '../services/usageService.js';
 
 export class AnalyticsController extends BaseController {
   protected model = Application; // primary model for queries
@@ -402,6 +404,238 @@ export class AnalyticsController extends BaseController {
         topSkills,
         activeCompanies: companyJobCounts.slice(0, 10),
         statusDistribution,
+      };
+    });
+  }
+
+  /** Admin usage & cost: platform spend, API calls, credits, tokens; per-user breakdown. */
+  async getAdminUsage(req: AuthRequest, res: Response) {
+    await this.handleRequest(req, res, async () => {
+      if (!req.user) throw Object.assign(new Error('Authentication required'), { status: 401 });
+
+      const logs = await UsageLog.findAll({ raw: true });
+      const tailorCredits = FEATURE_CONFIG['tailor_resume']?.creditsPerCall ?? 1;
+
+      // Platform totals from logs
+      let platformCost = 0;
+      let platformCredits = 0;
+      let platformTokens = 0;
+      let platformCalls = 0;
+      const byFeature: Record<string, { feature: string; displayName: string; calls: number; cost: number; credits: number; tokens: number }> = {};
+
+      for (const f of Object.keys(FEATURE_CONFIG)) {
+        byFeature[f] = {
+          feature: f,
+          displayName: FEATURE_CONFIG[f].displayName,
+          calls: 0,
+          cost: 0,
+          credits: 0,
+          tokens: 0,
+        };
+      }
+
+      for (const row of logs) {
+        const isSuccess = (row as any).status !== 'failure';
+        const inputT = Number(row.input_tokens ?? 0) || 0;
+        const outputT = Number(row.output_tokens ?? 0) || 0;
+        const ttsChars = Number((row as any).tts_characters ?? 0) || 0;
+        const hasTokens = inputT > 0 || outputT > 0;
+        const apiId = FEATURE_TO_API_ID[row.feature ?? ''] ?? 'dashscope_llm';
+        let cost = Number(row.cost ?? 0);
+        if (hasTokens) cost = computeCostFromTokens(apiId, inputT, outputT);
+        else if (ttsChars > 0) cost = computeCostFromTtsChars(apiId, ttsChars);
+        const credits = Number(row.credits_used ?? 0);
+        const tokens = Number(row.tokens_used ?? 0);
+        platformCalls += 1;
+        if (isSuccess) {
+          platformCost += cost;
+          platformCredits += credits;
+          platformTokens += tokens;
+        }
+        const f = row.feature ?? 'other';
+        if (!byFeature[f]) byFeature[f] = { feature: f, displayName: FEATURE_CONFIG[f]?.displayName ?? f, calls: 0, cost: 0, credits: 0, tokens: 0 };
+        byFeature[f].calls += 1;
+        if (isSuccess) {
+          byFeature[f].cost += cost;
+          byFeature[f].credits += credits;
+          byFeature[f].tokens += tokens;
+        }
+      }
+
+      // Legacy: TailoredResume counts (no usage_log; cost stays 0 — real cost is from token usage only)
+      const tailoredCount = await TailoredResume.count();
+      platformCalls += tailoredCount;
+      platformCredits += tailoredCount * tailorCredits;
+      if (byFeature['tailor_resume']) {
+        byFeature['tailor_resume'].calls += tailoredCount;
+        byFeature['tailor_resume'].credits += tailoredCount * tailorCredits;
+      }
+
+      // Per-user: from logs
+      const userMap: Record<string, { id: string; name: string; email: string; role: string; totalCost: number; totalCredits: number; totalTokens: number; byFeature: Record<string, { calls: number; cost: number; credits: number; tokens: number }> }> = {};
+
+      const users = await User.findAll({
+        where: { role: { [Op.not]: 'admin' } },
+        attributes: ['id', 'name', 'email', 'role'],
+        order: [['created_at', 'DESC']],
+      });
+      for (const u of users) {
+        const ua = u as any;
+        userMap[ua.id] = {
+          id: ua.id,
+          name: ua.name || '',
+          email: ua.email || '',
+          role: ua.role,
+          totalCost: 0,
+          totalCredits: 0,
+          totalTokens: 0,
+          byFeature: {},
+        };
+      }
+
+      for (const row of logs) {
+        const uid = row.user_id;
+        if (!userMap[uid]) continue;
+        const isSuccess = (row as any).status !== 'failure';
+        const inputT = Number(row.input_tokens ?? 0) || 0;
+        const outputT = Number(row.output_tokens ?? 0) || 0;
+        const hasTokens = inputT > 0 || outputT > 0;
+        const apiId = FEATURE_TO_API_ID[row.feature ?? ''] ?? 'dashscope_llm';
+        let cost = Number(row.cost ?? 0);
+        const ttsChars = Number((row as any).tts_characters ?? 0) || 0;
+        if (hasTokens) cost = computeCostFromTokens(apiId, inputT, outputT);
+        else if (ttsChars > 0) cost = computeCostFromTtsChars(apiId, ttsChars);
+        const credits = Number(row.credits_used ?? 0);
+        const tokens = Number(row.tokens_used ?? 0);
+        if (isSuccess) {
+          userMap[uid].totalCost += cost;
+          userMap[uid].totalCredits += credits;
+          userMap[uid].totalTokens += tokens;
+        }
+        const f = row.feature ?? 'other';
+        if (!userMap[uid].byFeature[f]) userMap[uid].byFeature[f] = { calls: 0, cost: 0, credits: 0, tokens: 0 };
+        userMap[uid].byFeature[f].calls += 1;
+        if (isSuccess) {
+          userMap[uid].byFeature[f].cost += cost;
+          userMap[uid].byFeature[f].credits += credits;
+          userMap[uid].byFeature[f].tokens += tokens;
+        }
+      }
+
+      // Legacy: TailoredResume per candidate (map to user)
+      const candidates = await Candidate.findAll({ attributes: ['id', 'user_id'] });
+      for (const c of candidates) {
+        const cc = c as any;
+        const count = await TailoredResume.count({ where: { candidate_id: cc.id } });
+        if (count === 0 || !cc.user_id) continue;
+        if (userMap[cc.user_id]) {
+          userMap[cc.user_id].totalCredits += count * tailorCredits;
+          if (!userMap[cc.user_id].byFeature['tailor_resume']) {
+            userMap[cc.user_id].byFeature['tailor_resume'] = { calls: 0, cost: 0, credits: 0, tokens: 0 };
+          }
+          userMap[cc.user_id].byFeature['tailor_resume'].calls += count;
+          userMap[cc.user_id].byFeature['tailor_resume'].credits += count * tailorCredits;
+        }
+      }
+
+      const usersList = Object.values(userMap).map((u) => ({
+        ...u,
+        totalCost: Math.round(u.totalCost * 100) / 100,
+        totalCredits: u.totalCredits,
+        totalTokens: u.totalTokens,
+        byFeature: u.byFeature,
+      }));
+
+      const externalApis = getExternalApis();
+      const byFeatureList = Object.values(byFeature).filter((b) => b.calls > 0 || b.cost > 0);
+      return {
+        platform: {
+          totalCost: Math.round(platformCost * 100) / 100,
+          totalCredits: platformCredits,
+          totalTokens: platformTokens,
+          totalApiCalls: platformCalls,
+          byFeature: Array.isArray(byFeatureList) ? byFeatureList : [],
+        },
+        externalApis: Array.isArray(externalApis) ? externalApis : [],
+        pricingDocUrl: ALIBABA_PRICING_DOC_URL,
+        featureConfig: Object.entries(FEATURE_CONFIG).map(([key, val]) => ({
+          feature: key,
+          displayName: val.displayName,
+          creditsPerCall: val.creditsPerCall,
+        })),
+        users: usersList,
+      };
+    });
+  }
+
+  /** Admin call statistics: total calls, failures, rate limit/content moderation errors, token totals, averages. Optional ?days=7 for last N days. */
+  async getAdminCallStats(req: AuthRequest, res: Response) {
+    await this.handleRequest(req, res, async () => {
+      if (!req.user) throw Object.assign(new Error('Authentication required'), { status: 401 });
+
+      const days = typeof (req as any).query?.days === 'string' ? parseInt((req as any).query.days, 10) : undefined;
+      const where: any = {};
+      if (Number.isFinite(days) && days > 0) {
+        const since = new Date();
+        since.setDate(since.getDate() - days);
+        where.created_at = { [Op.gte]: since };
+      }
+
+      const logs = await UsageLog.findAll({ where, raw: true });
+
+      let totalCallCount = logs.length;
+      let totalFailures = 0;
+      let rateLimitErrorCount = 0;
+      let contentModerationErrorCount = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let totalCost = 0;
+      let successCallCount = 0;
+
+      for (const row of logs) {
+        const status = (row as any).status;
+        const errorType = (row as any).error_type;
+        if (status === 'failure') {
+          totalFailures += 1;
+          if (errorType === 'rate_limit') rateLimitErrorCount += 1;
+          else if (errorType === 'content_moderation') contentModerationErrorCount += 1;
+          continue;
+        }
+        successCallCount += 1;
+        const inputT = Number(row.input_tokens ?? 0) || 0;
+        const outputT = Number(row.output_tokens ?? 0) || 0;
+        const ttsChars = Number((row as any).tts_characters ?? 0) || 0;
+        const apiId = FEATURE_TO_API_ID[row.feature ?? ''] ?? 'dashscope_llm';
+        totalInputTokens += inputT;
+        totalOutputTokens += outputT;
+        if (inputT > 0 || outputT > 0) {
+          totalCost += computeCostFromTokens(apiId, inputT, outputT);
+        } else if (ttsChars > 0) {
+          totalCost += computeCostFromTtsChars(apiId, ttsChars);
+        } else {
+          totalCost += Number(row.cost ?? 0);
+        }
+      }
+
+      const totalTokens = totalInputTokens + totalOutputTokens;
+      const failureRate = totalCallCount > 0 ? (totalFailures / totalCallCount) * 100 : 0;
+      const avgInputPerRequest = successCallCount > 0 ? totalInputTokens / successCallCount : 0;
+      const avgOutputPerRequest = successCallCount > 0 ? totalOutputTokens / successCallCount : 0;
+
+      return {
+        totalCallCount,
+        totalFailures,
+        failureRate: Math.round(failureRate * 100) / 100,
+        rateLimitErrorCount,
+        contentModerationErrorCount,
+        totalTokens,
+        totalInputTokens,
+        totalOutputTokens,
+        successCallCount,
+        avgInputPerRequest: Math.round(avgInputPerRequest * 10) / 10,
+        avgOutputPerRequest: Math.round(avgOutputPerRequest * 10) / 10,
+        totalCost: Math.round(totalCost * 10000) / 10000,
+        days: Number.isFinite(days) ? days : null,
       };
     });
   }

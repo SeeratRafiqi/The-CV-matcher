@@ -28,6 +28,8 @@ import type {
   CompanyAnalytics,
   CandidateAnalytics,
   AdminAnalytics,
+  AdminUsage,
+  AdminCallStats,
   TeamMember,
   PrivacySettings,
   MemberRole,
@@ -805,6 +807,15 @@ export async function getCandidateAnalytics(): Promise<CandidateAnalytics> {
 
 export async function getAdminAnalytics(): Promise<AdminAnalytics> {
   return apiGet<AdminAnalytics>('/analytics/admin');
+}
+
+export async function getAdminUsage(): Promise<AdminUsage> {
+  return apiGet<AdminUsage>('/analytics/admin/usage');
+}
+
+export async function getAdminCallStats(days?: number): Promise<AdminCallStats> {
+  const params = days != null ? `?days=${days}` : '';
+  return apiGet<AdminCallStats>(`/analytics/admin/call-stats${params}`);
 }
 
 // ==================== TEAM MANAGEMENT ====================

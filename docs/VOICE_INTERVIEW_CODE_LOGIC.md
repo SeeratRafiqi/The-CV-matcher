@@ -67,7 +67,7 @@ Assign session, start interview (generate questions, first line), submit answer 
 ### Assign (POST)
 - Body: `applicationId`, optional `durationMinutes` (5–60, default 10).
 - Creates `VoiceInterviewSession`: `max_questions = maxTurnsFromDuration(duration)`, `duration_minutes = duration`, `status: 'assigned'`, expires in 72h.
-- Optional n8n webhook.
+- Optional Alibaba DirectMail email to candidate (when ALIBABA_DM_FROM and ALIBABA_DM_PASS are set).
 
 ### Start (POST /session/:id/start)
 - Body: optional `preferredLanguage`.

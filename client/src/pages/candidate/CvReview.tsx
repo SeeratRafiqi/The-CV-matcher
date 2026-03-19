@@ -228,7 +228,7 @@ export default function CvReview() {
                   </div>
                   <p className="text-xs text-muted-foreground mt-1.5">
                     {structuredResume
-                      ? 'Preview uses the fixed HTML resume template. Download to export as PDF (same layout).'
+                      ? 'Download uses the same structured data as the preview so the PDF matches the content you see.'
                       : 'No structured data available; download uses server-generated PDF from your text.'}
                   </p>
                 </div>

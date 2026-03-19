@@ -13,12 +13,40 @@ import type { AuthRequest } from '../middleware/auth.js';
 import { qwenService, type InterviewState } from '../services/qwen.js';
 import { pdfParserService } from '../services/pdfParser.js';
 import { synthesizeSpeech, isAlibabaSpeechAvailable } from '../services/alibabaSpeech.js';
+import { notifyVoiceInterviewAssigned } from '../services/alibabaNotification.js';
+import { logUsage, logUsageFailure, inferErrorType } from '../services/usageService.js';
 
 const VOICE_INTERVIEW_EXPIRY_HOURS = 72;
 /** Once started, candidate must complete within this many minutes. */
 const VOICE_INTERVIEW_DURATION_MINUTES = 10;
 
-/** Filter to only substantive interview Q&A; exclude greeting, small talk, and technical-issue lines. */
+/** Build Q&A list from conductor conversationHistory when session.questions/answers are empty. Pairs assistant message → next user message as one Q&A. */
+function buildQaFromConversationHistory(conductorStateRaw: string | null | undefined): { question: string; answer: string; answeredAt: string | null }[] {
+  const out: { question: string; answer: string; answeredAt: string | null }[] = [];
+  if (!conductorStateRaw || typeof conductorStateRaw !== 'string') return out;
+  let state: { conversationHistory?: { role: string; content: string }[] };
+  try {
+    state = JSON.parse(conductorStateRaw);
+  } catch {
+    return out;
+  }
+  const history = state.conversationHistory;
+  if (!Array.isArray(history)) return out;
+  let lastAssistant = '';
+  for (const msg of history) {
+    const role = (msg?.role || '').toLowerCase();
+    const content = (msg?.content || '').trim();
+    if (role === 'assistant') {
+      lastAssistant = content;
+    } else if (role === 'user' && lastAssistant) {
+      out.push({ question: lastAssistant, answer: content, answeredAt: null });
+      lastAssistant = '';
+    }
+  }
+  return out;
+}
+
+/** Filter to only substantive interview Q&A; exclude greeting and small talk. Keeps questions with length >= 10 so summary can be generated from real Q&A. */
 function filterToInterviewQa(
   questions: { question: string; order: number }[],
   answers: { questionIndex: number; answerText: string; answeredAt: string }[]
@@ -29,7 +57,7 @@ function filterToInterviewQa(
   for (let i = 0; i < questions.length; i++) {
     const q = (questions[i]?.question || '').trim();
     const a = (answers[i]?.answerText || '').trim();
-    if (q.length < 25) continue;
+    if (q.length < 10) continue;
     if (smallTalkPattern.test(q)) continue;
     questionTexts.push(q);
     answerTexts.push(a);
@@ -163,6 +191,28 @@ async function ensureOutcomeColumn(): Promise<void> {
     }
   }
   outcomeColumnEnsured = true;
+}
+
+let candidateOutcomeColumnEnsured = false;
+async function ensureCandidateOutcomeColumn(): Promise<void> {
+  if (candidateOutcomeColumnEnsured) return;
+  try {
+    const dialect = sequelize.getDialect();
+    if (dialect === 'sqlite') {
+      await sequelize.getQueryInterface().addColumn('voice_interview_sessions', 'candidate_outcome', {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      });
+    } else {
+      await sequelize.query('ALTER TABLE voice_interview_sessions ADD COLUMN candidate_outcome TEXT NULL').catch(() => {});
+    }
+  } catch (e: any) {
+    const msg = e?.message ?? '';
+    if (!msg.includes('duplicate') && !msg.includes('already exists')) {
+      console.warn('[VoiceInterview] ensure candidate_outcome column:', msg.substring(0, 100));
+    }
+  }
+  candidateOutcomeColumnEnsured = true;
 }
 
 let durationMinutesColumnEnsured = false;
@@ -299,23 +349,20 @@ export const voiceInterviewController = {
         expires_at: expiresAt,
       });
 
-      const n8nWebhook = process.env.N8N_VOICE_INTERVIEW_ASSIGNED_WEBHOOK_URL;
-      if (n8nWebhook) {
-        try {
-          await fetch(n8nWebhook, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId: session.id,
-              applicationId,
-              jobId: application.job_id,
-              candidateId: application.candidate_id,
-              expiresAt: expiresAt.toISOString(),
-            }),
+      try {
+        const candidate = await Candidate.findByPk(application.candidate_id, { attributes: ['email', 'name'] });
+        const jobTitle = job?.title ?? 'the role';
+        if (candidate?.email) {
+          await notifyVoiceInterviewAssigned({
+            toEmail: (candidate as any).email,
+            candidateName: (candidate as any).name ?? 'Candidate',
+            jobTitle,
+            sessionId: session.id,
+            expiresAt,
           });
-        } catch (_) {
-          /* ignore webhook failure */
         }
+      } catch (_) {
+        /* ignore notification failure */
       }
 
       return res.status(201).json({
@@ -584,6 +631,7 @@ export const voiceInterviewController = {
   async getReport(req: AuthRequest, res: Response) {
     try {
       await ensureOutcomeColumn();
+      await ensureCandidateOutcomeColumn();
       if (!req.user) return res.status(401).json({ message: 'Authentication required' });
       const candidate = await Candidate.findOne({ where: { user_id: req.user.id } });
       if (!candidate) return res.status(404).json({ message: 'Candidate not found' });
@@ -608,30 +656,57 @@ export const voiceInterviewController = {
         answers = JSON.parse(session.answers || '[]');
       } catch {}
 
-      const qa = questions.map((q, i) => ({
-        question: q.question,
-        answer: answers[i]?.answerText ?? '',
-        answeredAt: answers[i]?.answeredAt ?? null,
-      }));
+      let qa: { question: string; answer: string; answeredAt: string | null }[] =
+        answers.length > 0
+          ? answers.map((a) => ({
+              question: (questions[a.questionIndex]?.question ?? '').trim() || `Question ${a.questionIndex + 1}`,
+              answer: a.answerText ?? '',
+              answeredAt: a.answeredAt ?? null,
+            }))
+          : questions.map((q, i) => ({
+              question: q.question,
+              answer: answers[i]?.answerText ?? '',
+              answeredAt: answers[i]?.answeredAt ?? null,
+            }));
 
-      let outcome = session.outcome ?? null;
-      if (session.status === 'completed' && (!outcome || !String(outcome).trim())) {
-        const { questionTexts, answerTexts } = filterToInterviewQa(questions, answers);
-        if (questionTexts.length > 0) {
-          try {
-            const jobTitle = (session as any).job?.title ?? 'Job';
-            const { outcome: generated } = await qwenService.generateVoiceInterviewOutcome({
-              jobTitle,
-              questions: questionTexts,
-              answers: answerTexts,
-            });
-            if (generated?.trim()) {
-              outcome = generated;
-              await session.update({ outcome: generated });
-            }
-          } catch (err: any) {
-            console.error('[VoiceInterview] lazy outcome generation (getReport) failed:', err?.message ?? err);
+      const noStoredQa = qa.length === 0 || qa.every((x) => !(x.answer || '').trim());
+      if (noStoredQa && session.conductor_state) {
+        const fromHistory = buildQaFromConversationHistory(session.conductor_state);
+        if (fromHistory.length > 0) qa = fromHistory;
+      }
+
+      let candidateOutcome = (session as any).candidate_outcome ?? null;
+      let recruiterOutcome = session.outcome ?? null;
+      const questionTextsForSummary = qa.map((x) => (x.question || '').trim()).filter(Boolean);
+      const answerTextsForSummary = qa.map((x) => (x.answer || '').trim());
+      const hasAnyContent = questionTextsForSummary.length > 0 || answerTextsForSummary.some((a) => a.length > 0);
+
+      if (session.status === 'completed' && hasAnyContent && ((!candidateOutcome || !String(candidateOutcome).trim()) || (!recruiterOutcome || !String(recruiterOutcome).trim()))) {
+        try {
+          const jobTitle = (session as any).job?.title ?? 'Job';
+          const outcomeResult = await qwenService.generateVoiceInterviewOutcome({
+            jobTitle,
+            questions: questionTextsForSummary.length ? questionTextsForSummary : ['Interview completed'],
+            answers: answerTextsForSummary.length ? answerTextsForSummary : ['No answers recorded'],
+          });
+          const candidateSummary = outcomeResult.candidateSummary;
+          const recruiterSummary = outcomeResult.recruiterSummary;
+          if (candidateSummary?.trim()) candidateOutcome = candidateSummary;
+          if (recruiterSummary?.trim()) recruiterOutcome = recruiterSummary;
+          if (req.user?.id && (outcomeResult as any)._usage) {
+            const u = (outcomeResult as any)._usage;
+            logUsage(req.user.id, 'voice_interview', {
+              inputTokens: u.input_tokens,
+              outputTokens: u.output_tokens,
+              tokensUsed: u.total_tokens,
+            }).catch(() => {});
           }
+          await session.update({
+            outcome: recruiterSummary?.trim() || recruiterOutcome,
+            candidate_outcome: candidateSummary?.trim() || candidateOutcome,
+          } as any);
+        } catch (err: any) {
+          console.error('[VoiceInterview] lazy outcome generation (getReport) failed:', err?.message ?? err);
         }
       }
 
@@ -642,7 +717,7 @@ export const voiceInterviewController = {
           jobTitle: (session as any).job?.title ?? 'Job',
           status: session.status,
           completedAt: session.completed_at,
-          outcome,
+          outcome: candidateOutcome ?? (session as any).candidate_outcome ?? '',
           qa,
         },
       });
@@ -689,7 +764,7 @@ export const voiceInterviewController = {
 
       // State-machine conductor: pre-generate questions based on time constraint (intro + N questions)
       const numInterviewQuestions = Math.max(MIN_INTERVIEW_QUESTIONS, session.max_questions - INTRO_TURNS);
-      const conductorQuestions = await qwenService.generateConductorQuestions({
+      const conductorResult = await qwenService.generateConductorQuestions({
         jobTitle,
         jobDescription,
         jobSkills,
@@ -697,6 +772,15 @@ export const voiceInterviewController = {
         count: numInterviewQuestions,
         preferredLanguage,
       });
+      const conductorQuestions = Array.isArray(conductorResult) ? conductorResult : [];
+      const conductorUsage = (conductorResult as any)._usage;
+      if (req.user?.id && conductorUsage) {
+        logUsage(req.user.id, 'voice_interview', {
+          inputTokens: conductorUsage.input_tokens,
+          outputTokens: conductorUsage.output_tokens,
+          tokensUsed: conductorUsage.total_tokens,
+        }).catch(() => {});
+      }
       const initialState: InterviewState = {
         phase: 'greeting',
         questionIndex: 0,
@@ -709,7 +793,14 @@ export const voiceInterviewController = {
         preferredLanguage,
       };
 
-      const { response, updatedState } = await qwenService.startInterview(initialState);
+      const { response, updatedState, usage: startUsage } = await qwenService.startInterview(initialState);
+      if (req.user?.id && startUsage) {
+        logUsage(req.user.id, 'voice_interview', {
+          inputTokens: startUsage.input_tokens,
+          outputTokens: startUsage.output_tokens,
+          tokensUsed: startUsage.total_tokens,
+        }).catch(() => {});
+      }
 
       const questionsForSession = [{ question: response, order: 0 }];
       const maxTurns = INTRO_TURNS + conductorQuestions.length; // greeting + small_talk + context + ready + N questions
@@ -900,7 +991,14 @@ export const voiceInterviewController = {
             });
           }
 
-          const { response: nextLine, updatedState } = await qwenService.conductInterview(state, text || '(No answer provided)');
+          const { response: nextLine, updatedState, usage: conductUsage } = await qwenService.conductInterview(state, text || '(No answer provided)');
+          if (req.user?.id && conductUsage) {
+            logUsage(req.user.id, 'voice_interview', {
+              inputTokens: conductUsage.input_tokens,
+              outputTokens: conductUsage.output_tokens,
+              tokensUsed: conductUsage.total_tokens,
+            }).catch(() => {});
+          }
 
           const isClosing = updatedState.phase === 'closing';
           const nextIndex = questions.length;
@@ -908,17 +1006,28 @@ export const voiceInterviewController = {
           if (isClosing) {
             const job = (session as any).job as Job & { title?: string };
             const jobTitle = job?.title ?? 'Role';
-            let outcome: string | null = null;
+            let recruiterOutcome: string | null = null;
+            let candidateOutcome: string | null = null;
             try {
+              await ensureCandidateOutcomeColumn();
               const { questionTexts, answerTexts } = filterToInterviewQa(questions, answers);
               if (questionTexts.length > 0) {
-                const { outcome: generated } = await qwenService.generateVoiceInterviewOutcome({
+                const outcomeResult = await qwenService.generateVoiceInterviewOutcome({
                   jobTitle,
                   questions: questionTexts,
                   answers: answerTexts,
                   expressionSummary: typeof expressionSummary === 'string' ? expressionSummary : undefined,
                 });
-                outcome = generated;
+                recruiterOutcome = outcomeResult.recruiterSummary?.trim() || null;
+                candidateOutcome = outcomeResult.candidateSummary?.trim() || null;
+                if (req.user?.id && (outcomeResult as any)._usage) {
+                  const u = (outcomeResult as any)._usage;
+                  logUsage(req.user.id, 'voice_interview', {
+                    inputTokens: u.input_tokens,
+                    outputTokens: u.output_tokens,
+                    tokensUsed: u.total_tokens,
+                  }).catch(() => {});
+                }
               }
             } catch (err) {
               console.error('[VoiceInterview] outcome generation failed:', err);
@@ -930,13 +1039,14 @@ export const voiceInterviewController = {
               conductor_state: JSON.stringify(updatedState),
               status: 'completed',
               completed_at: new Date(),
-              outcome: outcome ?? undefined,
+              outcome: recruiterOutcome ?? undefined,
+              candidate_outcome: candidateOutcome ?? undefined,
               updated_at: new Date(),
-            });
+            } as any);
             return res.json({
               done: true,
               message: 'Voice interview completed. Thank you!',
-              session: { id: session.id, status: 'completed', currentQuestion: nextLine, outcome: outcome ?? undefined },
+              session: { id: session.id, status: 'completed', currentQuestion: nextLine, outcome: candidateOutcome ?? undefined },
             });
           }
 
@@ -974,17 +1084,28 @@ export const voiceInterviewController = {
       if (isLast) {
         const job = (session as any).job as Job & { title?: string };
         const jobTitle = job?.title ?? 'Role';
-        let outcome: string | null = null;
+        let recruiterOutcome: string | null = null;
+        let candidateOutcome: string | null = null;
         try {
+          await ensureCandidateOutcomeColumn();
           const { questionTexts, answerTexts } = filterToInterviewQa(questions, answers);
           if (questionTexts.length > 0) {
-            const { outcome: generated } = await qwenService.generateVoiceInterviewOutcome({
+            const outcomeResult = await qwenService.generateVoiceInterviewOutcome({
               jobTitle,
               questions: questionTexts,
               answers: answerTexts,
               expressionSummary: typeof expressionSummary === 'string' ? expressionSummary : undefined,
             });
-            outcome = generated;
+            recruiterOutcome = outcomeResult.recruiterSummary?.trim() || null;
+            candidateOutcome = outcomeResult.candidateSummary?.trim() || null;
+            if (req.user?.id && (outcomeResult as any)._usage) {
+              const u = (outcomeResult as any)._usage;
+              logUsage(req.user.id, 'voice_interview', {
+                inputTokens: u.input_tokens,
+                outputTokens: u.output_tokens,
+                tokensUsed: u.total_tokens,
+              }).catch(() => {});
+            }
           }
         } catch (err) {
           console.error('[VoiceInterview] outcome generation failed:', err);
@@ -994,13 +1115,14 @@ export const voiceInterviewController = {
           current_question_index: nextIndex,
           status: 'completed',
           completed_at: new Date(),
-          outcome: outcome ?? undefined,
+          outcome: recruiterOutcome ?? undefined,
+          candidate_outcome: candidateOutcome ?? undefined,
           updated_at: new Date(),
-        });
+        } as any);
         return res.json({
           done: true,
           message: 'Voice interview completed. Thank you!',
-          session: { id: session.id, status: 'completed', outcome: outcome ?? undefined },
+          session: { id: session.id, status: 'completed', outcome: candidateOutcome ?? undefined },
         });
       }
 
@@ -1054,6 +1176,7 @@ export const voiceInterviewController = {
   async getReportForApplication(req: AuthRequest, res: Response) {
     try {
       await ensureOutcomeColumn();
+      await ensureCandidateOutcomeColumn();
       const { applicationId } = req.params;
       if (!applicationId) return res.status(400).json({ message: 'applicationId is required' });
 
@@ -1079,30 +1202,56 @@ export const voiceInterviewController = {
         answers = JSON.parse(session.answers || '[]');
       } catch {}
 
-      const qa = questions.map((q, i) => ({
-        question: q.question,
-        answer: answers[i]?.answerText ?? '',
-        answeredAt: answers[i]?.answeredAt ?? null,
-      }));
+      let qa: { question: string; answer: string; answeredAt: string | null }[] =
+        answers.length > 0
+          ? answers.map((a) => ({
+              question: (questions[a.questionIndex]?.question ?? '').trim() || `Question ${a.questionIndex + 1}`,
+              answer: a.answerText ?? '',
+              answeredAt: a.answeredAt ?? null,
+            }))
+          : questions.map((q, i) => ({
+              question: q.question,
+              answer: answers[i]?.answerText ?? '',
+              answeredAt: answers[i]?.answeredAt ?? null,
+            }));
+
+      const noStoredQa = qa.length === 0 || qa.every((x) => !(x.answer || '').trim());
+      if (noStoredQa && session.conductor_state) {
+        const fromHistory = buildQaFromConversationHistory(session.conductor_state);
+        if (fromHistory.length > 0) qa = fromHistory;
+      }
 
       let outcome = session.outcome ?? null;
-      if (session.status === 'completed' && (!outcome || !String(outcome).trim())) {
-        const { questionTexts, answerTexts } = filterToInterviewQa(questions, answers);
-        if (questionTexts.length > 0) {
-          try {
-            const jobTitle = (session as any).job?.title ?? 'Job';
-            const { outcome: generated } = await qwenService.generateVoiceInterviewOutcome({
-              jobTitle,
-              questions: questionTexts,
-              answers: answerTexts,
-            });
-            if (generated?.trim()) {
-              outcome = generated;
-              await session.update({ outcome: generated });
-            }
-          } catch (err: any) {
-            console.error('[VoiceInterview] lazy outcome generation (getReportForApplication) failed:', err?.message ?? err);
+      const questionTextsForSummary = qa.map((x) => (x.question || '').trim()).filter(Boolean);
+      const answerTextsForSummary = qa.map((x) => (x.answer || '').trim());
+      const hasAnyContent = questionTextsForSummary.length > 0 || answerTextsForSummary.some((a) => a.length > 0);
+
+      if (session.status === 'completed' && (!outcome || !String(outcome).trim()) && hasAnyContent) {
+        try {
+          const jobTitle = (session as any).job?.title ?? 'Job';
+          const outcomeResult = await qwenService.generateVoiceInterviewOutcome({
+            jobTitle,
+            questions: questionTextsForSummary.length ? questionTextsForSummary : ['Interview completed'],
+            answers: answerTextsForSummary.length ? answerTextsForSummary : ['No answers recorded'],
+          });
+          const candidateSummary = outcomeResult.candidateSummary;
+          const recruiterSummary = outcomeResult.recruiterSummary;
+          if (recruiterSummary?.trim()) outcome = recruiterSummary;
+          const cand = await Candidate.findByPk(session.candidate_id, { attributes: ['user_id'] });
+          if (cand?.user_id && (outcomeResult as any)._usage) {
+            const u = (outcomeResult as any)._usage;
+            logUsage((cand as any).user_id, 'voice_interview', {
+              inputTokens: u.input_tokens,
+              outputTokens: u.output_tokens,
+              tokensUsed: u.total_tokens,
+            }).catch(() => {});
           }
+          await session.update({
+            outcome: recruiterSummary?.trim() || outcome,
+            candidate_outcome: candidateSummary?.trim() || (session as any).candidate_outcome,
+          } as any);
+        } catch (err: any) {
+          console.error('[VoiceInterview] lazy outcome generation (getReportForApplication) failed:', err?.message ?? err);
         }
       }
 
@@ -1114,7 +1263,7 @@ export const voiceInterviewController = {
           jobTitle: (session as any).job?.title ?? 'Job',
           status: session.status,
           completedAt: session.completed_at,
-          outcome,
+          outcome: outcome ?? '',
           qa,
         },
       });
@@ -1136,14 +1285,19 @@ export const voiceInterviewController = {
       if (!text || typeof text !== 'string') {
         return res.status(400).json({ message: 'text is required' });
       }
-      const result = await synthesizeSpeech(text.trim().slice(0, 2000), languageCode || 'en');
+      const textToSpeak = text.trim().slice(0, 2000);
+      const result = await synthesizeSpeech(textToSpeak, languageCode || 'en');
       if (!result) {
         return res.status(503).json({ message: 'TTS not available or failed. Use browser speech as fallback.' });
+      }
+      if (req.user?.id && textToSpeak.length > 0) {
+        logUsage(req.user.id, 'voice_tts', { ttsCharacters: textToSpeak.length }).catch(() => {});
       }
       res.setHeader('Content-Type', result.mimeType);
       res.setHeader('Cache-Control', 'no-store');
       return res.send(result.audioBuffer);
     } catch (e: any) {
+      if (req.user?.id) logUsageFailure(req.user.id, 'voice_tts', inferErrorType(e)).catch(() => {});
       console.error('[VoiceInterview] TTS failed:', e?.message);
       return res.status(500).json({ message: e?.message ?? 'TTS failed' });
     }

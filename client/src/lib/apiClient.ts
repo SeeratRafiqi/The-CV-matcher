@@ -32,11 +32,20 @@ export async function apiRequest<T = any>(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-    credentials: 'include',
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      credentials: 'include',
+    });
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    if (/Failed to fetch|Load failed|NetworkError|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|ERR_NETWORK/i.test(msg)) {
+      throw new Error('Connection failed. Is the server running? Try "npm run dev" in the project folder.');
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }));

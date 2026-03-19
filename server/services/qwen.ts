@@ -119,127 +119,102 @@ export class QwenService {
     }
   }
 
+  /** Token usage from Alibaba DashScope (when available). Used for real-time cost. */
+  private static normalizeUsage(raw: any): { input_tokens: number; output_tokens: number; total_tokens: number } | undefined {
+    if (!raw) return undefined;
+    const input = Number(raw.prompt_tokens ?? raw.input_tokens ?? 0) || 0;
+    const output = Number(raw.completion_tokens ?? raw.output_tokens ?? 0) || 0;
+    const total = Number(raw.total_tokens) || input + output;
+    return total > 0 ? { input_tokens: input, output_tokens: output, total_tokens: total } : undefined;
+  }
+
+  /** One attempt: call API and return content + optional token usage. */
+  private async callQwenOnce(prompt: string, jsonMode: boolean): Promise<{ content: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number } }> {
+    const endpoint = this.apiUrl.endsWith('/chat/completions')
+      ? this.apiUrl
+      : `${this.apiUrl}/chat/completions`;
+    const requestBody: any = {
+      model: this.model,
+      messages: [{ role: 'user', content: prompt }],
+    };
+    if (jsonMode) requestBody.response_format = { type: 'json_object' };
+
+    const response = await axios.post<QwenResponse>(endpoint, requestBody, {
+      headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+      timeout: 60000,
+    });
+
+    const usage = QwenService.normalizeUsage((response.data as any).usage);
+    if (usage) {
+      console.log(`[Qwen] Token usage:`, usage);
+    }
+
+    const content = response.data.choices?.[0]?.message?.content;
+    if (!content) throw new Error('Empty response from Qwen API');
+
+    if (jsonMode) {
+      try {
+        const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/```\n([\s\S]*?)\n```/);
+        const jsonString = jsonMatch ? jsonMatch[1] : content;
+        const parsed = JSON.parse(jsonString);
+        return { content: JSON.stringify(parsed), usage };
+      } catch {
+        return { content, usage };
+      }
+    }
+    return { content, usage };
+  }
+
   private async callQwen(prompt: string, jsonMode: boolean = true): Promise<string> {
     if (!this.apiKey) {
       throw new Error('ALIBABA_LLM_API_KEY not configured. Set it in .env for AI features.');
     }
-
     let lastError: Error | null = null;
-
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
         console.log(`[Qwen] API call attempt ${attempt}/${this.maxRetries}`);
-        console.log(`[Qwen] API URL: ${this.apiUrl}`);
-        console.log(`[Qwen] Model: ${this.model}`);
-        console.log(`[Qwen] Prompt length: ${prompt.length} chars`);
-        
-        // Alibaba compatible-mode API (OpenAI-compatible format)
-        // Endpoint should be /chat/completions for compatible mode
-        const endpoint = this.apiUrl.endsWith('/chat/completions') 
-          ? this.apiUrl 
-          : `${this.apiUrl}/chat/completions`;
-        
-        // OpenAI-compatible request format
-        const requestBody: any = {
-          model: this.model,
-          messages: [
-            {
-              role: 'user',
-              content: prompt,
-            },
-          ],
-        };
-        
-        // Add JSON mode if supported (OpenAI-compatible format)
-        if (jsonMode) {
-          requestBody.response_format = { type: 'json_object' };
-        }
-        
-        console.log(`[Qwen] Calling endpoint: ${endpoint}`);
-        
-        const response = await axios.post<QwenResponse>(
-          endpoint,
-          requestBody,
-          {
-            headers: {
-              'Authorization': `Bearer ${this.apiKey}`,
-              'Content-Type': 'application/json',
-            },
-            timeout: 60000, // 60 seconds
-          }
-        );
-
-        console.log(`[Qwen] Response status: ${response.status}`);
-        console.log(`[Qwen] Response data keys:`, Object.keys(response.data));
-        
-        // Log token usage if available
-        const usage = (response.data as any).usage;
-        if (usage) {
-          console.log(`[Qwen] Token usage:`, {
-            prompt_tokens: usage.prompt_tokens || usage.input_tokens,
-            completion_tokens: usage.completion_tokens || usage.output_tokens,
-            total_tokens: usage.total_tokens || (usage.prompt_tokens + usage.completion_tokens),
-          });
-        }
-        
-        console.log(`[Qwen] Response data:`, JSON.stringify(response.data, null, 2).substring(0, 500));
-        console.log(`[Qwen] Response choices length:`, response.data.choices?.length);
-        
-        // Compatible mode returns choices[0].message.content
-        const content = response.data.choices?.[0]?.message?.content;
-        if (!content) {
-          console.error(`[Qwen] Empty content in response:`, JSON.stringify(response.data, null, 2));
-          throw new Error('Empty response from Qwen API');
-        }
-        
-        console.log(`[Qwen] Content length: ${content.length} chars`);
-        console.log(`[Qwen] Content preview: ${content.substring(0, 200)}`);
-
-        // If JSON mode, try to parse and return clean JSON
-        if (jsonMode) {
-          try {
-            // Sometimes the response is wrapped in markdown code blocks
-            const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/```\n([\s\S]*?)\n```/);
-            const jsonString = jsonMatch ? jsonMatch[1] : content;
-            const parsed = JSON.parse(jsonString);
-            return JSON.stringify(parsed);
-          } catch (parseError) {
-            // If parsing fails, return raw content
-            return content;
-          }
-        }
-
+        const { content } = await this.callQwenOnce(prompt, jsonMode);
         return content;
       } catch (error: any) {
         lastError = error;
         console.error(`[Qwen] API call failed (attempt ${attempt}/${this.maxRetries}):`, error.message);
-        if (error.response) {
-          console.error(`[Qwen] Response status: ${error.response.status}`);
-          console.error(`[Qwen] Response data:`, JSON.stringify(error.response.data, null, 2));
-        }
-        if (error.request) {
-          console.error(`[Qwen] Request made but no response received`);
-        }
         if (attempt < this.maxRetries) {
-          const delay = attempt * 1000; // Exponential backoff
-          console.warn(`[Qwen] Retrying in ${delay}ms...`);
-          await new Promise((resolve) => setTimeout(resolve, delay));
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
         }
       }
     }
+    throw lastError || new Error('Qwen API call failed after retries');
+  }
 
+  /** Like callQwen but returns token usage when Alibaba provides it (for real-time cost). */
+  private async callQwenWithUsage(prompt: string, jsonMode: boolean = true): Promise<{ content: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number } }> {
+    if (!this.apiKey) {
+      throw new Error('ALIBABA_LLM_API_KEY not configured. Set it in .env for AI features.');
+    }
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        return await this.callQwenOnce(prompt, jsonMode);
+      } catch (error: any) {
+        lastError = error;
+        if (attempt < this.maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+        }
+      }
+    }
     throw lastError || new Error('Qwen API call failed after retries');
   }
 
   /**
    * Call Qwen with full conversation history (system + user/assistant messages).
    * Use this when the model needs to see prior turns to stay in context (e.g. voice interview).
+   * Returns content and usage for cost tracking.
    */
   private async callQwenWithMessages(
     systemPrompt: string,
     messages: { role: 'user' | 'assistant'; content: string }[],
     jsonMode: boolean = true
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number } }> {
     if (!this.apiKey) {
       throw new Error('ALIBABA_LLM_API_KEY not configured. Set it in .env for AI features.');
     }
@@ -261,19 +236,21 @@ export class QwenService {
       headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
       timeout: 60000,
     });
+    const usage = QwenService.normalizeUsage((response.data as any).usage);
     const content = response.data.choices?.[0]?.message?.content;
     if (!content) throw new Error('Empty response from Qwen API');
+    let out = content;
     if (jsonMode) {
       try {
         const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/```\n([\s\S]*?)\n```/);
         const jsonString = jsonMatch ? jsonMatch[1] : content;
         const parsed = JSON.parse(jsonString);
-        return JSON.stringify(parsed);
+        out = JSON.stringify(parsed);
       } catch {
-        return content;
+        // keep out = content
       }
     }
-    return content;
+    return { content: out, usage };
   }
 
   async extractCandidateInfo(cvText: string): Promise<{
@@ -1100,8 +1077,15 @@ Return a JSON object:
 You MUST include "revisedCvText": copy the entire CV TEXT from the input, then replace each original bullet with its improved version from rewrittenBullets. This allows the user to download the improved CV.
 Provide 3-6 sections and 3-8 rewritten bullets. Return ONLY valid JSON.`;
 
-    const response = await this.callQwen(prompt, true);
-    const parsed = JSON.parse(response);
+    const { content, usage } = await this.callQwenWithUsage(prompt, true);
+    const parsed = JSON.parse(content) as {
+      score: number;
+      sections: { section: string; issues: string[]; suggestions: string[] }[];
+      rewrittenBullets: { original: string; improved: string }[];
+      summary: string;
+      _usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+    };
+    if (usage) (parsed as any)._usage = usage;
     return parsed;
   }
 
@@ -1152,8 +1136,10 @@ Return JSON:
 
 Return ONLY valid JSON.`;
 
-    const response = await this.callQwen(prompt, true);
-    return JSON.parse(response);
+    const { content, usage } = await this.callQwenWithUsage(prompt, true);
+    const parsed = JSON.parse(content) as { tailoredSections: { section: string; changes: string[] }[]; keyChanges: string[]; matchImprovement: { before: number; after: number } };
+    if (usage) (parsed as any)._usage = usage;
+    return parsed;
   }
 
   /**
@@ -1191,8 +1177,10 @@ Return ONLY valid JSON:
   "keyChanges": ["What you reordered", "What you removed", "etc."]
 }`;
 
-    const response = await this.callQwen(prompt, true);
-    return JSON.parse(response);
+    const { content, usage } = await this.callQwenWithUsage(prompt, true);
+    const parsed = JSON.parse(content) as { tailoredCvText: string; keyChanges: string[]; _usage?: { input_tokens: number; output_tokens: number; total_tokens: number } };
+    if (usage) (parsed as any)._usage = usage;
+    return parsed;
   }
 
   /**
@@ -1244,12 +1232,14 @@ Return ONLY valid JSON with this exact structure (use empty strings or empty arr
 
 Extract "achievements" from sections like Awards, Achievements, Honours, Rewards, or any listed accolades (e.g. Dean's List, Employee of the Month, scholarships). Use empty array [] if none found.`;
 
-    const response = await this.callQwen(prompt, true);
-    const parsed = JSON.parse(response);
-    return {
+    const { content, usage } = await this.callQwenWithUsage(prompt, true);
+    const parsed = JSON.parse(content);
+    const result = {
       ...parsed,
       achievements: Array.isArray(parsed.achievements) ? parsed.achievements : [],
     };
+    if (usage) (result as any)._usage = usage;
+    return result;
   }
 
   /**
@@ -1742,8 +1732,8 @@ Return ONLY valid JSON: { "question": "Your single interview line or question he
 
     conversationMessages.push({ role: 'user', content: lastUserMessage });
 
-    const response = await this.callQwenWithMessages(systemWithContext, conversationMessages, true);
-    const parsed = JSON.parse(response);
+    const { content: responseContent } = await this.callQwenWithMessages(systemWithContext, conversationMessages, true);
+    const parsed = JSON.parse(responseContent);
     let question = typeof parsed?.question === 'string' ? parsed.question.trim() : '';
     if (!question) {
       question = 'Tell me about a challenge you faced in a recent project and how you overcame it.';
@@ -1752,18 +1742,16 @@ Return ONLY valid JSON: { "question": "Your single interview line or question he
   }
 
   /**
-   * Generate a short outcome/summary of the voice interview for the candidate and recruiter.
-   * Evidence-based only: do not attribute strengths or positive traits unless clearly demonstrated in the answers.
+   * Generate two reports: one for the candidate (improvement-focused), one for the recruiter (detailed assessment).
    */
   async generateVoiceInterviewOutcome(params: {
     jobTitle: string;
     questions: string[];
     answers: string[];
     expressionSummary?: string | null;
-  }): Promise<{ outcome: string }> {
+  }): Promise<{ candidateSummary: string; recruiterSummary: string; _usage?: { input_tokens: number; output_tokens: number; total_tokens: number } }> {
     const { jobTitle, questions, answers, expressionSummary } = params;
 
-    // Detect non-substantive answers: empty, placeholder, or nonsensical (e.g. random letters, gibberish)
     const rawAnswers = (answers || []).map((a) => (a || '').trim());
     const normalizedAnswers = rawAnswers.map((a) => a.toLowerCase());
     const placeholderPatterns = ['(no answer)', 'no answer provided', 'n/a', 'na', 'none', '—', '--'];
@@ -1771,26 +1759,25 @@ Return ONLY valid JSON: { "question": "Your single interview line or question he
     const allPlaceholderOrEmpty = normalizedAnswers.every((a) => !a || placeholderPatterns.some((p) => a.includes(p)) || a.length < 3);
     const veryShortOrEmpty = totalLength < 25;
 
-    // Gibberish: no real English words, or mostly repeated chars / random letters
     const text = rawAnswers.join(' ');
     const commonWords = /\b(the|and|for|was|have|with|this|that|from|are|were|been|said|each|about|when|which|their|would|there|could|other|into|more|these|some|what|than|first|your|them|will|after|where|many|then|being|over|such|just|most|also|back|through|before|right|while|during|made|should|because|between|under|again|those|very|same|another|here|next|last|might|still|find|every|think|both|often|until|much|going|never|little|since|always|yes|no|ok|okay|good|well|really|actually|think|thought|know|work|experience|project|team|role|job|skills)\b/i;
     const realWordCount = (text.match(commonWords) || []).length;
     const looksLikeGibberish = totalLength >= 10 && realWordCount < 2;
     const sameCharRepeated = rawAnswers.some((a) => a.length >= 4 && new Set(a.replace(/\s/g, '').split('')).size <= 2);
 
+    const fallbackRecruiter = `The candidate completed the voice interview but did not provide substantive answers (empty, minimal, or non-meaningful). Review the full Q&A transcript and follow up if needed.`;
+    const fallbackCandidate = `Your answers in this interview were limited. Review the questions below and consider preparing more detailed responses for future interviews.`;
+
     if (allPlaceholderOrEmpty || veryShortOrEmpty || looksLikeGibberish || sameCharRepeated) {
-      return {
-        outcome: `The candidate completed the voice interview but did not provide substantive answers to the questions (answers were empty, minimal, or non-meaningful). Recruiters should review the full Q&A transcript below and follow up with the candidate if needed. No assessment of skills or fit can be made from this session.`,
-      };
+      return { candidateSummary: fallbackCandidate, recruiterSummary: fallbackRecruiter };
     }
 
     const qaList = questions
       .map((q, i) => `Question ${i + 1}: ${q}\nCandidate answer: "${(answers[i] ?? '(No answer)').trim()}"`)
       .join('\n\n');
-    const demeanorNote = expressionSummary
-      ? `\nDemeanor/expression (from video): ${expressionSummary}\n`
-      : '';
-    const prompt = `You are evaluating a job interview. Your job is to generate an HONEST, EVIDENCE-BASED report for recruiters.
+    const demeanorNote = expressionSummary ? `\nDemeanor/expression (from video): ${expressionSummary}\n` : '';
+
+    const prompt = `You are evaluating a job interview. Generate TWO separate report texts based on the transcript below. Be evidence-based; only state what the answers clearly show.
 
 Job role: ${jobTitle}
 
@@ -1798,54 +1785,49 @@ Interview Q&A (exact transcript):
 ${qaList.substring(0, 4500)}
 ${demeanorNote}
 
-## Strict rules
-- Every claim you make MUST be backed by a direct quote or specific example from the candidate's actual answers.
-- If the candidate gave short, vague, or irrelevant answers — say so explicitly. Do NOT soften it.
-- If the candidate typed gibberish or non-answers — mark that as "No valid response provided" or "Weak — non-meaningful answer."
-- NEVER infer enthusiasm, communication skills, or culture fit from greetings or small talk alone. Only from substantive answers.
-- Do NOT give benefit of the doubt. Only report what actually happened.
-- If there is no evidence for a positive trait → omit it entirely. Do not guess.
+## 1) candidateSummary (for the candidate)
+Write a short report FOR THE CANDIDATE. Tone: constructive and helpful. Include:
+- What they did well (only if clearly shown in answers).
+- Flaws or what they said wrong / could improve (e.g. vague answers, missing examples, weak technical depth).
+- Concrete suggestions: what to improve for next time (e.g. "Give a specific example when asked about X", "Expand on your role in Y").
+Do NOT include recruiter-only content (fit for role, hire/don't hire). Keep it to 1–2 short paragraphs.
 
-## Required report format
-Generate the "outcome" field as a single text block. Put the recruiter summary FIRST so recruiters see it at a glance. Structure:
+## 2) recruiterSummary (for the recruiter)
+Write a DETAILED report FOR RECRUITERS. Include:
+- **Overall interview:** How the interview went; how the candidate answered (clear vs vague, engaged vs brief, technical depth).
+- **Fit for role:** Strong fit / Potential fit / Weak fit / Not recommend — with one sentence why for ${jobTitle}.
+- **Candidate strengths and flaws:** Bullet points with evidence from the transcript (e.g. "Strong: gave concrete example on Q2. Flaw: Q3 answer was vague.").
+- **Per question (optional):** For each substantive question: brief quote of response + assessment (Strong/Acceptable/Weak/No answer).
+- **Red flags (if any):** e.g. "No meaningful response to question N."
+Be direct; do not soften weak answers.
 
----
-
-**SUMMARY (for recruiters) — put this at the very beginning**
-- **Fit for role:** Is this candidate a good fit for the ${jobTitle} role? (Recommend: Strong fit / Potential fit / Weak fit / Not recommend — and one sentence why.)
-- **Interview quality:** How did the interview go overall? (e.g. clear answers, engaged, technical depth, or vague, short, technical gaps.)
-- **Key takeaways:** 2–4 bullet points for the recruiter: strengths or concerns based only on evidence from the transcript. No generic praise without evidence.
-
----
-
-Then add:
-
-1) **Per question** (for each interview question, not greeting/setup):
-   - Question asked
-   - Candidate's actual response (quote briefly)
-   - Assessment: [Strong / Acceptable / Weak / No Answer] and one line why
-
-2) **Overall:** Overall assessment (Poor / Below expectations / Meets expectations / Strong) based on answers. No positive traits unless clearly evidenced.
-
-3) **Red flags** (if any): "⚠️ Candidate did not provide a meaningful response to question N" for gibberish or non-answers.
-
-Return ONLY valid JSON: { "outcome": "Your full report text here, with SUMMARY first, then per-question and overall." }`;
+Return ONLY valid JSON:
+{
+  "candidateSummary": "Your full candidate report text here.",
+  "recruiterSummary": "Your full recruiter report text here."
+}`;
 
     try {
-      const response = await this.callQwen(prompt, true);
+      const { content: response, usage } = await this.callQwenWithUsage(prompt, true);
       const raw = (response || '').trim();
-      let outcome: string = '';
+      let candidateSummary = '';
+      let recruiterSummary = '';
       try {
         const parsed = JSON.parse(raw);
-        outcome = typeof parsed?.outcome === 'string' ? parsed.outcome.trim() : '';
+        candidateSummary = typeof parsed?.candidateSummary === 'string' ? parsed.candidateSummary.trim() : '';
+        recruiterSummary = typeof parsed?.recruiterSummary === 'string' ? parsed.recruiterSummary.trim() : '';
       } catch {
-        if (raw.length > 80) outcome = raw.substring(0, 4000).trim();
+        if (raw.length > 80) {
+          candidateSummary = raw.substring(0, 2000).trim();
+          recruiterSummary = raw.substring(0, 4000).trim();
+        }
       }
-      if (outcome) return { outcome };
-      return { outcome: 'Interview completed. Review the Q&A transcript for details.' };
+      if (!candidateSummary) candidateSummary = fallbackCandidate;
+      if (!recruiterSummary) recruiterSummary = fallbackRecruiter;
+      return { candidateSummary, recruiterSummary, _usage: usage };
     } catch (err) {
       console.error('[Qwen] generateVoiceInterviewOutcome error:', err);
-      return { outcome: 'Interview completed. Review the Q&A transcript for details.' };
+      return { candidateSummary: fallbackCandidate, recruiterSummary: fallbackRecruiter };
     }
   }
 
@@ -1889,19 +1871,20 @@ Generate exactly ${count} interview questions. Include a balanced mix of these f
 
 One question per line. No numbering. No preamble — output only the questions, one per line.`;
 
-    const response = await this.callQwen(prompt, false);
-    const lines = (response || '')
+    const { content, usage } = await this.callQwenWithUsage(prompt, false);
+    const lines = (content || '')
       .split(/\n+/)
       .map((s) => s.replace(/^\d+[.)]\s*/, '').trim())
       .filter((s) => s.length > 10);
-    return lines.slice(0, count);
+    const questions = lines.slice(0, count);
+    return Object.assign(questions, { _usage: usage });
   }
 
   /**
    * Call this ONCE when the interview starts (before any user message).
    * Returns the opening greeting and initial state.
    */
-  async startInterview(state: InterviewState): Promise<{ response: string; updatedState: InterviewState }> {
+  async startInterview(state: InterviewState): Promise<{ response: string; updatedState: InterviewState; usage?: { input_tokens: number; output_tokens: number; total_tokens: number } }> {
     const systemPrompt = this.buildPhasePrompt(state);
     const langCode = (state.preferredLanguage || 'en').split('-')[0];
     const languageName = QwenService.LANGUAGE_NAMES[langCode] || 'English';
@@ -1909,20 +1892,21 @@ One question per line. No numbering. No preamble — output only the questions, 
       ? `Start the interview now. Greet ${state.candidateName} warmly. Reply entirely in ${languageName} — every word must be in ${languageName}, no English.`
       : `Start the interview now. Greet ${state.candidateName} warmly.`;
     const respondInLanguage = langCode !== 'en' ? languageName : undefined;
-    const response = await this.callQwenWithHistory(
+    const { content: responseText, usage } = await this.callQwenWithHistory(
       systemPrompt,
       [{ role: 'user', content: openingPrompt }],
       respondInLanguage
     );
     return {
-      response: response.trim(),
+      response: responseText.trim(),
       updatedState: {
         ...state,
         conversationHistory: [
           { role: 'user', content: openingPrompt },
-          { role: 'assistant', content: response.trim() },
+          { role: 'assistant', content: responseText.trim() },
         ],
       },
+      usage,
     };
   }
 
@@ -1933,7 +1917,7 @@ One question per line. No numbering. No preamble — output only the questions, 
   async conductInterview(
     state: InterviewState,
     userMessage: string
-  ): Promise<{ response: string; updatedState: InterviewState }> {
+  ): Promise<{ response: string; updatedState: InterviewState; usage?: { input_tokens: number; output_tokens: number; total_tokens: number } }> {
     const history: { role: 'user' | 'assistant'; content: string }[] = [
       ...state.conversationHistory,
       { role: 'user', content: userMessage },
@@ -1944,11 +1928,11 @@ One question per line. No numbering. No preamble — output only the questions, 
     const langCode = (state.preferredLanguage || 'en').split('-')[0];
     const languageName = QwenService.LANGUAGE_NAMES[langCode] || 'English';
     const respondInLanguage = langCode !== 'en' ? languageName : undefined;
-    const response = await this.callQwenWithHistory(systemPrompt, history, respondInLanguage);
+    const { content: responseText, usage } = await this.callQwenWithHistory(systemPrompt, history, respondInLanguage);
 
     const updatedHistory: { role: 'user' | 'assistant'; content: string }[] = [
       ...history,
-      { role: 'assistant', content: response.trim() },
+      { role: 'assistant', content: responseText.trim() },
     ];
 
     const updatedQuestionIndex =
@@ -1957,7 +1941,7 @@ One question per line. No numbering. No preamble — output only the questions, 
         : state.questionIndex;
 
     return {
-      response: response.trim(),
+      response: responseText.trim(),
       updatedState: {
         ...state,
         phase: nextPhase,
@@ -1966,18 +1950,19 @@ One question per line. No numbering. No preamble — output only the questions, 
           nextPhase === 'small_talk' ? state.smallTalkTurns + 1 : state.smallTalkTurns,
         conversationHistory: updatedHistory,
       },
+      usage,
     };
   }
 
   /**
-   * Calls Qwen with system prompt + full conversation history. Returns plain text (no JSON).
+   * Calls Qwen with system prompt + full conversation history. Returns plain text (no JSON) and usage for cost tracking.
    * When respondInLanguage is set (e.g. "Arabic"), appends a user message so the model's next reply is in that language.
    */
   private async callQwenWithHistory(
     systemPrompt: string,
     history: { role: 'user' | 'assistant'; content: string }[],
     respondInLanguage?: string
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number } }> {
     const messages = [...history];
     if (respondInLanguage) {
       messages.push({
@@ -1985,8 +1970,9 @@ One question per line. No numbering. No preamble — output only the questions, 
         content: `[Instruction: Your next reply must be written entirely in ${respondInLanguage}. Use only ${respondInLanguage} — no English or other languages. Write your response now.]`,
       });
     }
-    const content = await this.callQwenWithMessages(systemPrompt, messages, false);
-    return typeof content === 'string' ? content.trim() : String(content).trim();
+    const { content, usage } = await this.callQwenWithMessages(systemPrompt, messages, false);
+    const text = typeof content === 'string' ? content.trim() : String(content).trim();
+    return { content: text, usage };
   }
 
   /**

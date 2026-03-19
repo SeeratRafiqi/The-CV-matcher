@@ -19,4 +19,14 @@ router.get('/admin', authenticateToken, requireAdmin, (req, res) =>
   analyticsController.getAdminAnalytics(req, res)
 );
 
+// GET /api/analytics/admin/usage — admin usage & cost (platform + per-user)
+router.get('/admin/usage', authenticateToken, requireAdmin, (req, res) =>
+  analyticsController.getAdminUsage(req, res)
+);
+
+// GET /api/analytics/admin/call-stats — call statistics & performance metrics (?days=7 for last N days)
+router.get('/admin/call-stats', authenticateToken, requireAdmin, (req, res) =>
+  analyticsController.getAdminCallStats(req, res)
+);
+
 export default router;

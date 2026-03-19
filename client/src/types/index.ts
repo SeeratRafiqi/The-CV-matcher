@@ -592,6 +592,59 @@ export interface AdminAnalytics {
   statusDistribution: Record<string, number>;
 }
 
+export interface ExternalApiPricing {
+  id: string;
+  name: string;
+  model: string;
+  inputPricePer1M: number | null;
+  outputPricePer1M: number | null;
+  /** TTS: price per 10K characters (International). */
+  pricePer10KChars?: number | null;
+  unit?: string;
+  pricingSource: 'env' | 'defaults';
+}
+
+export interface AdminUsage {
+  platform: {
+    totalCost: number;
+    totalCredits: number;
+    totalTokens: number;
+    totalApiCalls: number;
+    byFeature: { feature: string; displayName: string; calls: number; cost: number; credits: number; tokens: number }[];
+  };
+  externalApis: ExternalApiPricing[];
+  /** Official Alibaba pricing doc URL — set .env from this for your model */
+  pricingDocUrl?: string;
+  featureConfig: { feature: string; displayName: string; creditsPerCall: number }[];
+  users: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    totalCost: number;
+    totalCredits: number;
+    totalTokens: number;
+    byFeature: Record<string, { calls: number; cost: number; credits: number; tokens: number }>;
+  }[];
+}
+
+export interface AdminCallStats {
+  totalCallCount: number;
+  totalFailures: number;
+  failureRate: number;
+  rateLimitErrorCount: number;
+  contentModerationErrorCount: number;
+  totalTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  successCallCount: number;
+  avgInputPerRequest: number;
+  avgOutputPerRequest: number;
+  totalCost: number;
+  /** When set, stats are for the last N days only. */
+  days: number | null;
+}
+
 // Team Member Types
 export type MemberRole = 'owner' | 'admin' | 'recruiter' | 'viewer';
 export type MemberStatus = 'pending' | 'active' | 'deactivated';

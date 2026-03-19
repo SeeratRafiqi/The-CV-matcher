@@ -26,6 +26,7 @@ import { InterviewAnswer } from './InterviewAnswer.js';
 import { InterviewReport } from './InterviewReport.js';
 import { TailoredResume } from './TailoredResume.js';
 import { VoiceInterviewSession } from './VoiceInterviewSession.js';
+import { UsageLog } from './UsageLog.js';
 
 // === User associations ===
 User.hasOne(Candidate, { foreignKey: 'user_id', as: 'candidateProfile' });
@@ -90,6 +91,9 @@ Application.belongsTo(PipelineStage, { foreignKey: 'pipeline_stage_id', as: 'pip
 // === Notifications (Phase 3) ===
 User.hasMany(Notification, { foreignKey: 'user_id', as: 'notifications' });
 Notification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
+User.hasMany(UsageLog, { foreignKey: 'user_id', as: 'usageLogs' });
+UsageLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
 // === Application History (Phase 3) ===
 Application.hasMany(ApplicationHistory, { foreignKey: 'application_id', as: 'history' });
@@ -201,4 +205,5 @@ export {
   InterviewReport,
   TailoredResume,
   VoiceInterviewSession,
+  UsageLog,
 };

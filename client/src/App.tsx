@@ -67,6 +67,8 @@ import InterviewPrep from "@/pages/company/InterviewPrep";
 
 // Admin pages (Phase 4)
 import AdminAnalytics from "@/pages/admin/Analytics";
+import UsageCost from "@/pages/admin/UsageCost";
+import CallStatistics from "@/pages/admin/CallStatistics";
 
 // Shared pages
 import NotificationsPage from "@/pages/Notifications";
@@ -240,6 +242,20 @@ function Router() {
         <ProtectedRoute>
           <AdminRoute>
             <AdminAnalytics />
+          </AdminRoute>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/admin/usage">
+        <ProtectedRoute>
+          <AdminRoute>
+            <UsageCost />
+          </AdminRoute>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/admin/call-statistics">
+        <ProtectedRoute>
+          <AdminRoute>
+            <CallStatistics />
           </AdminRoute>
         </ProtectedRoute>
       </Route>

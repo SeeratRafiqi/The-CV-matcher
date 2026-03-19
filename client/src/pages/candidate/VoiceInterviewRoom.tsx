@@ -103,6 +103,8 @@ function VoiceInterviewRoom() {
   const [expressionSamples, setExpressionSamples] = useState<ExpressionSummary[]>([]);
   const [preferredLanguage, setPreferredLanguage] = useState('en');
   const [isAIThinking, setIsAIThinking] = useState(false);
+  /** Browser support: voice = SpeechRecognition + getUserMedia; media = getUserMedia (camera/mic). */
+  const [browserSupport, setBrowserSupport] = useState<{ voice: boolean; media: boolean } | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
@@ -145,6 +147,15 @@ function VoiceInterviewRoom() {
 
   const session = sessionQuery.data?.session;
   sessionStatusRef.current = session?.status;
+
+  // One-time browser support check (for start screen message)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const voice =
+      !!(window as any).SpeechRecognition || !!(window as any).webkitSpeechRecognition;
+    const media = typeof navigator?.mediaDevices?.getUserMedia === 'function';
+    setBrowserSupport({ voice, media });
+  }, []);
   const [timeExpired, setTimeExpired] = useState(false);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
 
@@ -709,9 +720,33 @@ function VoiceInterviewRoom() {
                 <p className="text-gray-400 text-sm mb-2">
                   You will hear {session.maxQuestions} questions and can answer by speaking or typing.
                 </p>
-                <p className="text-amber-200/90 text-sm">
-                  First allow camera and microphone so your video and voice work. Use Chrome or Edge for best support.
-                </p>
+                {browserSupport && (
+                  <div className="rounded-lg border border-gray-600 bg-gray-900/60 p-3 text-sm space-y-2">
+                    {!browserSupport.voice && (
+                      <p className="text-amber-200">
+                        Voice answers work best in <strong>Chrome or Edge</strong>. You can still do the interview and type your answers in other browsers.
+                      </p>
+                    )}
+                    {browserSupport.voice && (
+                      <p className="text-green-300/90">
+                        Your browser supports voice. Allow the microphone when asked.
+                      </p>
+                    )}
+                    {!browserSupport.media && (
+                      <p className="text-amber-200">
+                        Camera and microphone need a <strong>secure page</strong> (use https:// or http://localhost).
+                      </p>
+                    )}
+                    <p className="text-gray-400 text-xs">
+                      Browser issue? Use Chrome or Edge, allow mic (and camera if you want video) when the browser asks.
+                    </p>
+                  </div>
+                )}
+                {!browserSupport && (
+                  <p className="text-amber-200/90 text-sm">
+                    First allow camera and microphone so your video and voice work. Use Chrome or Edge for best support.
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium text-white block">Interview language</label>

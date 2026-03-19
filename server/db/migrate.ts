@@ -28,6 +28,7 @@ import {
   InterviewAttempt,
   InterviewAnswer,
   InterviewReport,
+  UsageLog,
 } from './models/index.js';
 
 // Helper: safely add a column (ignores 'Duplicate column' errors)
@@ -123,6 +124,7 @@ async function migrate() {
       { name: 'InterviewAttempt', model: InterviewAttempt, table: 'interview_attempts' },
       { name: 'InterviewAnswer', model: InterviewAnswer, table: 'interview_answers' },
       { name: 'InterviewReport', model: InterviewReport, table: 'interview_reports' },
+      { name: 'UsageLog', model: UsageLog, table: 'usage_logs' },
     ];
 
     if (FORCE_RECREATE) {
@@ -405,12 +407,35 @@ async function migrate() {
       `ALTER TABLE cover_letters ADD INDEX idx_cover_letters_candidate_job (candidate_id, job_id)`
     );
 
+    // ---------- usage_logs ----------
+    console.log('\n[usage_logs]');
+    await addColumn('usage_logs', 'input_tokens',
+      `ALTER TABLE usage_logs ADD COLUMN input_tokens INT NULL`
+    );
+    await addColumn('usage_logs', 'output_tokens',
+      `ALTER TABLE usage_logs ADD COLUMN output_tokens INT NULL`
+    );
+    await addColumn('usage_logs', 'tts_characters',
+      `ALTER TABLE usage_logs ADD COLUMN tts_characters INT NULL`
+    );
+    await addColumn('usage_logs', 'status',
+      `ALTER TABLE usage_logs ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'success'`
+    );
+    await addColumn('usage_logs', 'error_type',
+      `ALTER TABLE usage_logs ADD COLUMN error_type VARCHAR(32) NULL`
+    );
+
     } // end if (!isSqlite)
 
     // SQLite: add application CV fields if missing
     if (isSqlite) {
       await addColumn('applications', 'cv_type', `ALTER TABLE applications ADD COLUMN cv_type TEXT DEFAULT 'original'`);
       await addColumn('applications', 'submitted_cv_text', `ALTER TABLE applications ADD COLUMN submitted_cv_text TEXT`);
+      await addColumn('usage_logs', 'input_tokens', `ALTER TABLE usage_logs ADD COLUMN input_tokens INTEGER NULL`);
+      await addColumn('usage_logs', 'output_tokens', `ALTER TABLE usage_logs ADD COLUMN output_tokens INTEGER NULL`);
+      await addColumn('usage_logs', 'tts_characters', `ALTER TABLE usage_logs ADD COLUMN tts_characters INTEGER NULL`);
+      await addColumn('usage_logs', 'status', `ALTER TABLE usage_logs ADD COLUMN status TEXT NOT NULL DEFAULT 'success'`);
+      await addColumn('usage_logs', 'error_type', `ALTER TABLE usage_logs ADD COLUMN error_type TEXT NULL`);
     }
 
     // ===================================================================

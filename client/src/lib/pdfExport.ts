@@ -124,28 +124,6 @@ export function voiceInterviewReportToPdfBlob(report: VoiceInterviewReportForPdf
   }
   y += LINE_HEIGHT * 0.5;
 
-  if (report.outcome && report.outcome.trim()) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text('Summary & Analysis', MARGIN, y);
-    y += LINE_HEIGHT * 1.2;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    const outcomeLines = (report.outcome || '').trim().split(/\r?\n/);
-    for (const line of outcomeLines) {
-      if (y > PAGE_HEIGHT - MARGIN - LINE_HEIGHT) {
-        doc.addPage();
-        y = MARGIN;
-      }
-      const wrapped = doc.splitTextToSize(line || ' ', MAX_WIDTH);
-      for (const w of wrapped) {
-        doc.text(w, MARGIN, y);
-        y += LINE_HEIGHT;
-      }
-    }
-    y += LINE_HEIGHT * 0.5;
-  }
-
   if (report.qa && report.qa.length > 0) {
     if (y > PAGE_HEIGHT - MARGIN - LINE_HEIGHT * 4) {
       doc.addPage();
@@ -177,6 +155,32 @@ export function voiceInterviewReportToPdfBlob(report: VoiceInterviewReportForPdf
       }
       y += LINE_HEIGHT * 0.3;
     }
+    y += LINE_HEIGHT * 0.5;
+  }
+
+  if (report.outcome && report.outcome.trim()) {
+    if (y > PAGE_HEIGHT - MARGIN - LINE_HEIGHT * 4) {
+      doc.addPage();
+      y = MARGIN;
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('Summary & Analysis', MARGIN, y);
+    y += LINE_HEIGHT * 1.2;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    const outcomeLines = (report.outcome || '').trim().split(/\r?\n/);
+    for (const line of outcomeLines) {
+      if (y > PAGE_HEIGHT - MARGIN - LINE_HEIGHT) {
+        doc.addPage();
+        y = MARGIN;
+      }
+      const wrapped = doc.splitTextToSize(line || ' ', MAX_WIDTH);
+      for (const w of wrapped) {
+        doc.text(w, MARGIN, y);
+        y += LINE_HEIGHT;
+      }
+    }
   }
 
   return doc.output('blob');
@@ -188,27 +192,59 @@ export function voiceInterviewReportToPdfBlob(report: VoiceInterviewReportForPdf
  * Splits content across multiple A4 pages if the content is tall.
  */
 export async function htmlElementToPdfBlob(element: HTMLElement): Promise<Blob> {
+  // 1. Force element to A4 width so canvas matches PDF proportions
+  const A4_WIDTH_PX = 794; // ~210mm at 96dpi
+  const originalWidth = element.style.width;
+  const originalPosition = element.style.position;
+  
+  element.style.width = `${A4_WIDTH_PX}px`;
+  element.style.position = 'relative';
+
   const canvas = await html2canvas(element, {
-    scale: 2,
+    scale: 2,              // High DPI for crisp text
     useCORS: true,
     logging: false,
     backgroundColor: '#ffffff',
+    width: A4_WIDTH_PX,
+    windowWidth: A4_WIDTH_PX,
   });
+
+  // Restore original styles
+  element.style.width = originalWidth;
+  element.style.position = originalPosition;
+
   const imgData = canvas.toDataURL('image/png');
-  const doc = new jsPDF({ format: 'a4', unit: 'mm' });
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const imgWidth = pageWidth;
-  const imgHeight = (canvas.height * pageWidth) / canvas.width;
-  let heightLeft = imgHeight;
-  let position = 0;
-  doc.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-  heightLeft -= pageHeight;
-  while (heightLeft > 0) {
-    position = heightLeft - imgHeight;
-    doc.addPage();
-    doc.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
+  const doc = new jsPDF({ format: 'a4', unit: 'mm', orientation: 'portrait' });
+
+  const pageWidthMm = 210;   // A4
+  const pageHeightMm = 297;  // A4
+
+  // Scale image to fit A4 width exactly
+  const imgWidthMm = pageWidthMm;
+  const imgHeightMm = (canvas.height / canvas.width) * imgWidthMm;
+
+  let remainingHeight = imgHeightMm;
+  let pageIndex = 0;
+
+  while (remainingHeight > 0) {
+    if (pageIndex > 0) doc.addPage();
+
+    // yOffset: how far into the image this page starts (in mm)
+    const yOffset = pageIndex * pageHeightMm;
+
+    // Draw the image shifted upward so the correct slice appears on this page
+    doc.addImage(
+      imgData,
+      'PNG',
+      0,                    // x
+      -yOffset,             // y — negative offset clips to current page slice
+      imgWidthMm,
+      imgHeightMm,
+    );
+
+    remainingHeight -= pageHeightMm;
+    pageIndex++;
   }
+
   return doc.output('blob');
 }

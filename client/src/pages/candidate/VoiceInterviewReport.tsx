@@ -35,7 +35,7 @@ export default function VoiceInterviewReport() {
           <CardContent className="py-8 text-center">
             <p className="text-muted-foreground">Report not found.</p>
             <Link href="/candidate/interviews">
-              <Button variant="link" className="mt-2">Back to Interviews</Button>
+              <Button variant="ghost" className="mt-2">Back to Interviews</Button>
             </Link>
           </CardContent>
         </Card>
@@ -44,62 +44,78 @@ export default function VoiceInterviewReport() {
   }
 
   return (
-    <div className="container max-w-3xl py-6 space-y-6">
-      <div className="flex items-center gap-3">
-        <Link href="/candidate/interviews">
-          <Button variant="ghost" size="icon">
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
-        </Link>
-        <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
-            <FileText className="w-5 h-5" />
-            Voice Interview Report
-          </h1>
-          <p className="text-sm text-muted-foreground">{report.jobTitle}</p>
+    <div className="min-h-screen flex flex-col">
+      <div className="flex-1 overflow-y-auto">
+        <div className="container max-w-3xl py-6 space-y-6 pb-12">
+          <div className="flex items-center gap-3">
+            <Link href="/candidate/interviews">
+              <Button variant="ghost" size="icon">
+                <ArrowLeft className="w-4 h-4" />
+              </Button>
+            </Link>
+            <div>
+              <h1 className="text-xl font-semibold flex items-center gap-2">
+                <FileText className="w-5 h-5" />
+                Voice Interview Report
+              </h1>
+              <p className="text-sm text-muted-foreground">{report.jobTitle}</p>
+            </div>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Summary</CardTitle>
+              <CardDescription>
+                {report.completedAt
+                  ? `Completed ${formatDateTime(report.completedAt)}`
+                  : 'Interview session'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {report.outcome ? (
+                <div
+                  className="rounded-lg border bg-muted/30 p-4 text-sm whitespace-pre-wrap max-h-[420px] overflow-y-auto"
+                  role="region"
+                  aria-label="Interview summary"
+                >
+                  {report.outcome}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground py-2">
+                  No summary available yet. Your answers are listed below. The summary may appear after the interview is processed.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Questions &amp; Answers</CardTitle>
+              <CardDescription>Your responses from the voice interview</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {report.qa.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No questions and answers recorded.</p>
+              ) : (
+                report.qa.map((item, idx) => (
+                  <div key={idx} className="space-y-2">
+                    <p className="font-medium text-sm text-muted-foreground">Question {idx + 1}</p>
+                    <p className="text-sm">{item.question}</p>
+                    <p className="pl-3 border-l-2 border-primary/50 text-sm">{item.answer || '(No answer)'}</p>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          <Link href="/candidate/interviews">
+            <Button variant="outline" className="gap-2">
+              <ArrowLeft className="w-4 h-4" />
+              Back to Interviews
+            </Button>
+          </Link>
         </div>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Summary</CardTitle>
-          <CardDescription>
-            {report.completedAt
-              ? `Completed ${formatDateTime(report.completedAt)}`
-              : 'Interview session'}
-          </CardDescription>
-        </CardHeader>
-        {report.outcome && (
-          <CardContent>
-            <div className="rounded-lg border bg-muted/30 p-4 text-sm whitespace-pre-wrap">
-              {report.outcome}
-            </div>
-          </CardContent>
-        )}
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Questions &amp; Answers</CardTitle>
-          <CardDescription>Your responses from the voice interview</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {report.qa.map((item, idx) => (
-            <div key={idx} className="space-y-2">
-              <p className="font-medium text-sm text-muted-foreground">Question {idx + 1}</p>
-              <p className="text-sm">{item.question}</p>
-              <p className="pl-3 border-l-2 border-primary/50 text-sm">{item.answer}</p>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Link href="/candidate/interviews">
-        <Button variant="outline" className="gap-2">
-          <ArrowLeft className="w-4 h-4" />
-          Back to Interviews
-        </Button>
-      </Link>
     </div>
   );
 }

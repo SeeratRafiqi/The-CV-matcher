@@ -195,7 +195,7 @@ export function populateResumeTemplate(data: StructuredResume, options?: Populat
 
   return RESUME_HTML_TEMPLATE.replace(/\{\{NAME\}\}/g, escapeHtml(name))
     .replace(/\{\{CONTACT\}\}/g, contactLine)
-    .replace(/\{\{SUMMARY\}\}/g, escapeHtml(summary))
+    .replace(/\{\{SUMMARY\}\}/g, summary)
     .replace(/\{\{SKILLS\}\}/g, skillsHtml)
     .replace(/\{\{WORK_EXPERIENCE\}\}/g, experienceHtml)
     .replace(/\{\{PROJECTS_SECTION\}\}/g, projectsSectionHtml)
